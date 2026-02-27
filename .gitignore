@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Docker
+*.tar
+
+# Local test secrets — never commit
+.env
+.env.*
+secrets.yaml
+
+# HA data dir (only exists at runtime in the container)
+data/

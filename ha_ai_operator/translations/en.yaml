@@ -1,0 +1,52 @@
+configuration:
+  timezone:
+    name: Timezone
+    description: >-
+      IANA timezone string used by the container (e.g. Europe/Berlin, America/New_York).
+  mode:
+    name: Operating Mode
+    description: >-
+      Controls what the AI agent is allowed to do.
+      read_only: only reads data, never changes anything.
+      control_assist: allows basic control (lights, media, helpers).
+      ops_write: full access; medium/high-risk actions require confirmation.
+  llm_provider:
+    name: LLM Provider
+    description: >-
+      Which LLM backend to use.
+      openai_compatible: any OpenAI-API-compatible provider (OpenAI, Groq, Together, OpenRouter, …).
+      ollama: local Ollama instance (default base URL http://localhost:11434/v1).
+      custom_http: custom OpenAI-compatible endpoint; set llm_base_url accordingly.
+      anthropic: Anthropic Claude models via api.anthropic.com (uses x-api-key auth, /v1/messages endpoint).
+  llm_base_url:
+    name: LLM Base URL
+    description: >-
+      Base URL of the LLM API, e.g. http://192.168.1.50:11434/v1 for a local Ollama.
+      Leave empty to use the provider default (api.openai.com for openai_compatible).
+  llm_api_key:
+    name: LLM API Key
+    description: >-
+      API key for the LLM provider. Stored as a password field; never logged or displayed.
+      Leave empty if the provider does not require authentication (e.g. local Ollama).
+  allow_supervisor_api:
+    name: Allow Supervisor API Tools
+    description: >-
+      Expose Supervisor-level tools to the agent (host info, core info, core restart).
+      Keep disabled unless you specifically need the agent to inspect or restart HA Core.
+      Note: does NOT automatically enable hassio_api in the add-on manifest.
+  confirmation_required:
+    name: Require Confirmation for Risky Actions
+    description: >-
+      When true, the agent returns a plan and confirmation token for any medium or
+      high-risk action instead of executing it immediately.
+      Strongly recommended in ops_write mode.
+  max_actions_per_turn:
+    name: Max Actions per Turn
+    description: >-
+      Maximum number of HA tool calls the agent may make in a single response.
+      Prevents runaway loops. Recommended: 5–10.
+  audit_log_level:
+    name: Audit Log Level
+    description: >-
+      minimal: log tool name, params summary, result summary, and risk level.
+      verbose: reserved for future extended logging (currently identical to minimal).
