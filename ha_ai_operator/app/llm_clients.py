@@ -24,9 +24,8 @@ Supported backends
 
 OAuth note
 ──────────
-OpenAI and Anthropic authenticate via static API keys only.
-Google Vertex AI / Azure OpenAI support OAuth / managed identity – those
-backends are not yet implemented.  Add a subclass here when needed.
+OpenAI-compatible providers default to static API keys.
+For OpenAI, this add-on can also send a bearer OAuth token (Codex OAuth mode).
 """
 from __future__ import annotations
 
@@ -55,9 +54,18 @@ class BaseLLMClient(ABC):
 # ── OpenAI-compatible (covers OpenAI, Groq, Ollama, custom HTTP) ──────────────
 
 class OpenAICompatibleClient(BaseLLMClient):
-    def __init__(self, provider: str, base_url: str, api_key: str) -> None:
+    def __init__(
+        self,
+        provider: str,
+        base_url: str,
+        api_key: str,
+        auth_mode: str = "api_key",
+        oauth_token: str = "",
+    ) -> None:
         self._provider = provider
         self._api_key = api_key
+        self._auth_mode = auth_mode
+        self._oauth_token = oauth_token
         # Resolve base URL
         if base_url:
             self._base = base_url.rstrip("/")
@@ -68,8 +76,13 @@ class OpenAICompatibleClient(BaseLLMClient):
 
     def _headers(self) -> dict[str, str]:
         h = {"Content-Type": "application/json"}
-        if self._api_key:
-            h["Authorization"] = f"Bearer {self._api_key}"
+        auth_value = ""
+        if self._auth_mode == "codex_oauth":
+            auth_value = self._oauth_token or self._api_key
+        else:
+            auth_value = self._api_key or self._oauth_token
+        if auth_value:
+            h["Authorization"] = f"Bearer {auth_value}"
         return h
 
     async def chat(
@@ -301,6 +314,8 @@ def make_llm_client() -> BaseLLMClient:
     provider = os.environ.get("LLM_PROVIDER", "openai_compatible")
     base_url = os.environ.get("LLM_BASE_URL", "")
     api_key = os.environ.get("LLM_API_KEY", "")
+    auth_mode = os.environ.get("OPENAI_AUTH_MODE", "api_key")
+    oauth_token = os.environ.get("LLM_OAUTH_TOKEN", "")
 
     if provider == "anthropic":
         return AnthropicClient(api_key=api_key)
@@ -310,4 +325,6 @@ def make_llm_client() -> BaseLLMClient:
         provider=provider,
         base_url=base_url,
         api_key=api_key,
+        auth_mode=auth_mode,
+        oauth_token=oauth_token,
     )

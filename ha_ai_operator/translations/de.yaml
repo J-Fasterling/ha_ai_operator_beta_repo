@@ -18,6 +18,13 @@ configuration:
       ollama: lokale Ollama-Instanz (Standard-URL http://localhost:11434/v1).
       custom_http: eigener OpenAI-kompatibler Endpunkt; llm_base_url entsprechend setzen.
       anthropic: Anthropic Claude-Modelle via api.anthropic.com (x-api-key-Auth, /v1/messages-Endpoint).
+  openai_auth_mode:
+    name: OpenAI-Auth-Modus
+    description: >-
+      Authentifizierungsmodus fuer OpenAI-kompatible Anfragen.
+      api_key: nutzt llm_api_key als Bearer-Token (standardmaessiger OpenAI-API-Key-Flow).
+      codex_oauth: nutzt llm_oauth_token als Bearer-Token (ChatGPT-Codex-OAuth-Access-Token-Flow).
+      Wird fuer Anthropic ignoriert.
   llm_base_url:
     name: LLM Basis-URL
     description: >-
@@ -28,6 +35,12 @@ configuration:
     description: >-
       API-Schlüssel für den LLM-Anbieter. Wird als Passwort gespeichert und niemals geloggt.
       Leer lassen, wenn der Anbieter keine Authentifizierung benötigt (z.B. lokales Ollama).
+  llm_oauth_token:
+    name: LLM OAuth-Token
+    description: >-
+      OAuth-Access-Token, wenn openai_auth_mode auf codex_oauth steht.
+      Wird als Passwort gespeichert und niemals geloggt.
+      Beispielquelle (ausserhalb von HA): jq -r '.tokens.access_token' ~/.codex/auth.json
   allow_supervisor_api:
     name: Supervisor-API-Tools erlauben
     description: >-

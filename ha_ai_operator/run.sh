@@ -13,6 +13,13 @@ export CONFIRMATION_REQUIRED="$(bashio::config 'confirmation_required')"
 export MAX_ACTIONS_PER_TURN="$(bashio::config 'max_actions_per_turn')"
 export AUDIT_LOG_LEVEL="$(bashio::config 'audit_log_level')"
 
+if bashio::config.has_value 'openai_auth_mode'; then
+    export OPENAI_AUTH_MODE
+    OPENAI_AUTH_MODE="$(bashio::config 'openai_auth_mode')"
+else
+    export OPENAI_AUTH_MODE="api_key"
+fi
+
 # ── Handle nullable / optional secrets ───────────────────────────────────────
 # Never log the values of secret fields.
 if bashio::config.has_value 'llm_base_url'; then
@@ -30,11 +37,21 @@ else
     export LLM_API_KEY=""
 fi
 
+if bashio::config.has_value 'llm_oauth_token'; then
+    export LLM_OAUTH_TOKEN
+    LLM_OAUTH_TOKEN="$(bashio::config 'llm_oauth_token')"
+    # Never log LLM_OAUTH_TOKEN — not even a hash or length.
+else
+    export LLM_OAUTH_TOKEN=""
+fi
+
 # ── Safe startup log (no secrets) ─────────────────────────────────────────────
 bashio::log.info "Mode              : ${MODE}"
 bashio::log.info "LLM provider      : ${LLM_PROVIDER}"
+bashio::log.info "OpenAI auth mode  : ${OPENAI_AUTH_MODE}"
 bashio::log.info "LLM base URL set  : $([ -n "${LLM_BASE_URL}"  ] && echo yes || echo no)"
 bashio::log.info "LLM API key set   : $([ -n "${LLM_API_KEY}"   ] && echo yes || echo no)"
+bashio::log.info "LLM OAuth set     : $([ -n "${LLM_OAUTH_TOKEN}" ] && echo yes || echo no)"
 bashio::log.info "Supervisor API    : ${ALLOW_SUPERVISOR_API}"
 bashio::log.info "Confirmation req. : ${CONFIRMATION_REQUIRED}"
 bashio::log.info "Max actions/turn  : ${MAX_ACTIONS_PER_TURN}"
