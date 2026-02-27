@@ -1,5 +1,5 @@
-name: "HA AI Operator"
-version: "0.1.1"
+name: "HA AI Operator - Beta"
+version: "0.1.1-beta.1"
 slug: "ha_ai_operator"
 description: "On-device AI agent to operate Home Assistant safely"
 url: "https://github.com/J-Fasterling/ha_ai_operator"
@@ -14,7 +14,7 @@ init: false
 
 ingress: true
 ingress_port: 8099
-panel_title: "HA AI Operator"
+panel_title: "HA AI Operator - Beta"
 panel_icon: "mdi:robot"
 
 host_network: false
