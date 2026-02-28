@@ -23,6 +23,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from agent import Agent
+from auth.routes import router as auth_router
 from logging_utils import configure_logging, sanitize_for_log
 from schemas import (
     ChatCompletionRequest,
@@ -47,6 +48,8 @@ app = FastAPI(
 ensure_dirs()
 configure_logging()
 log = logging.getLogger("ha_ai_operator.main")
+
+app.include_router(auth_router)
 
 
 class FrontendLogEvent(BaseModel):
@@ -275,7 +278,7 @@ async def ui_root(request: Request) -> HTMLResponse:
 @app.get("/{full_path:path}", response_class=HTMLResponse, include_in_schema=False)
 async def ui_catchall(full_path: str, request: Request) -> HTMLResponse:
     # Let actual API routes bubble up as 404; only serve UI for unknown paths.
-    api_prefixes = ("v1/", "api/", "health", "debug/")
+    api_prefixes = ("v1/", "api/", "health", "debug/", "auth/", "oauth/")
     if any(full_path.startswith(p) for p in api_prefixes):
         log.info("[req:%s] catchall 404 for api-like path=%s", _request_id(request), full_path)
         raise HTTPException(status_code=404, detail="Not found")
@@ -316,7 +319,18 @@ _UI_HTML = """<!DOCTYPE html>
     .badge-ops_write    { background:#7f1d1d; color:#fca5a5; }
     .badge-sup  { background:#4c1d95; color:#c4b5fd; }
     .badge-prov { background:#0c4a6e; color:#7dd3fc; }
-    /* ── main layout ── */
+    /* ── tab nav ── */
+    .tabs { background: var(--surface); border-bottom: 1px solid var(--border);
+            display: flex; gap: 0; flex-shrink: 0; }
+    .tab-btn { background: none; border: none; border-bottom: 2px solid transparent;
+               color: var(--muted); cursor: pointer; padding: 8px 20px;
+               font-size: .85rem; font-weight: 600; transition: color .15s; }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+    /* ── tab content ── */
+    .tab-content { display: none; flex: 1; overflow: hidden; }
+    .tab-content.active { display: flex; }
+    /* ── main layout (chat+audit) ── */
     .layout { display: flex; flex: 1; overflow: hidden; }
     /* ── chat panel ── */
     .chat { flex: 1; display: flex; flex-direction: column; padding: 14px;
@@ -384,6 +398,48 @@ _UI_HTML = """<!DOCTYPE html>
     .diag.hidden .diag-body { display: none; }
     .diag.hidden .diag-hdr { border-bottom: none; }
     @media (max-width: 700px) { .audit { display: none; } }
+    /* ── auth tab ── */
+    #tab-auth { flex-direction: column; overflow-y: auto; padding: 20px; gap: 20px; }
+    .auth-section { background: var(--surface); border: 1px solid var(--border);
+                    border-radius: 10px; padding: 16px; display: flex;
+                    flex-direction: column; gap: 12px; }
+    .auth-section h3 { font-size: .9rem; font-weight: 700; color: var(--accent);
+                        margin-bottom: 4px; }
+    .auth-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .auth-row label { font-size: .8rem; color: var(--muted); min-width: 80px; }
+    .auth-input { flex: 1; background: var(--bg); border: 1px solid var(--border);
+                  border-radius: 6px; color: var(--text); padding: 7px 11px;
+                  font-size: .85rem; font-family: inherit; min-width: 180px; }
+    .auth-input:focus { outline: none; border-color: var(--accent); }
+    .auth-btn { background: var(--accent); color: #0c1520; border: none;
+                border-radius: 6px; padding: 7px 16px; font-weight: 700;
+                font-size: .82rem; cursor: pointer; white-space: nowrap; }
+    .auth-btn:hover { background: #7dd3fc; }
+    .auth-btn.danger { background: #7f1d1d; color: #fca5a5; }
+    .auth-btn.danger:hover { background: var(--red); color: #fff; }
+    .auth-btn.secondary { background: var(--border); color: var(--text); }
+    .auth-btn.secondary:hover { background: #4b5563; }
+    .auth-result { font-size: .78rem; padding: 5px 9px; border-radius: 5px;
+                   display: none; }
+    .auth-result.ok  { background: #14532d; color: #86efac; display: block; }
+    .auth-result.err { background: #7f1d1d; color: #fca5a5; display: block; }
+    .auth-result.info { background: #0c4a6e; color: #7dd3fc; display: block; }
+    .auth-url-box { background: var(--bg); border: 1px solid var(--border);
+                    border-radius: 6px; padding: 8px 11px; font-size: .75rem;
+                    font-family: ui-monospace,monospace; word-break: break-all;
+                    color: #7dd3fc; display: none; }
+    /* ── profiles table ── */
+    .prof-table { width: 100%; border-collapse: collapse; font-size: .78rem; }
+    .prof-table th { text-align: left; color: var(--muted); font-weight: 600;
+                     padding: 5px 8px; border-bottom: 1px solid var(--border); }
+    .prof-table td { padding: 6px 8px; border-bottom: 1px solid #1f2937;
+                     vertical-align: middle; }
+    .type-badge { padding: 2px 7px; border-radius: 999px; font-size: .68rem;
+                  font-weight: 700; }
+    .type-api_key { background:#0c4a6e; color:#7dd3fc; }
+    .type-token   { background:#4c1d95; color:#c4b5fd; }
+    .type-oauth   { background:#14532d; color:#86efac; }
+    .expired-badge { color: var(--red); font-size: .68rem; font-weight: 700; }
   </style>
 </head>
 <body>
@@ -393,33 +449,109 @@ _UI_HTML = """<!DOCTYPE html>
       <span class="badge badge-prov" id="badge-prov">loading…</span>
     </div>
   </header>
-  <div class="layout">
-    <div class="chat">
-      <div class="messages" id="messages">
-        <div class="msg system">Welcome to HA AI Operator. Loading configuration…</div>
-      </div>
-      <div class="typing" id="typing" style="display:none">Agent is thinking…</div>
-      <div class="input-row">
-        <textarea id="input" rows="2"
-          placeholder="Ask about your home or give instructions… (Enter to send, Shift+Enter for newline)"></textarea>
-        <button class="send" id="sendBtn" onclick="send()">Send</button>
-      </div>
-      <div class="diag" id="diag">
-        <div class="diag-hdr">
-          <span>Diagnostics</span>
-          <button class="diag-btn" id="diagToggle" type="button" onclick="toggleDiag()">Hide</button>
+  <nav class="tabs">
+    <button class="tab-btn active" onclick="switchTab('chat')">Chat</button>
+    <button class="tab-btn" onclick="switchTab('audit')">Audit</button>
+    <button class="tab-btn" onclick="switchTab('auth')">Auth</button>
+  </nav>
+
+  <!-- ── Chat tab ── -->
+  <div id="tab-chat" class="tab-content active">
+    <div class="layout">
+      <div class="chat">
+        <div class="messages" id="messages">
+          <div class="msg system">Welcome to HA AI Operator. Loading configuration…</div>
         </div>
-        <div class="diag-body" id="diagBody">Initializing diagnostics…</div>
+        <div class="typing" id="typing" style="display:none">Agent is thinking…</div>
+        <div class="input-row">
+          <textarea id="input" rows="2"
+            placeholder="Ask about your home or give instructions… (Enter to send, Shift+Enter for newline)"></textarea>
+          <button class="send" id="sendBtn" onclick="send()">Send</button>
+        </div>
+        <div class="diag" id="diag">
+          <div class="diag-hdr">
+            <span>Diagnostics</span>
+            <button class="diag-btn" id="diagToggle" type="button" onclick="toggleDiag()">Hide</button>
+          </div>
+          <div class="diag-body" id="diagBody">Initializing diagnostics…</div>
+        </div>
       </div>
-    </div>
-    <div class="audit">
-      <div class="panel-hdr">Audit Log</div>
-      <div class="audit-list" id="auditList">
-        <div class="ae" style="border:none;color:var(--muted)">No actions yet.</div>
+      <div class="audit">
+        <div class="panel-hdr">Audit Log</div>
+        <div class="audit-list" id="auditList">
+          <div class="ae" style="border:none;color:var(--muted)">No actions yet.</div>
+        </div>
+        <button class="refresh-btn" onclick="loadAudit()">&#8635; Refresh</button>
       </div>
-      <button class="refresh-btn" onclick="loadAudit()">&#8635; Refresh</button>
     </div>
   </div>
+
+  <!-- ── Audit tab (full-page) ── -->
+  <div id="tab-audit" class="tab-content">
+    <div style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
+      <div class="panel-hdr" style="padding:14px 18px;">Audit Log</div>
+      <div class="audit-list" id="auditListFull" style="flex:1;overflow-y:auto;padding:12px;gap:6px;">
+        <div class="ae" style="border:none;color:var(--muted)">No actions yet.</div>
+      </div>
+      <button class="refresh-btn" onclick="loadAuditFull()">&#8635; Refresh</button>
+    </div>
+  </div>
+
+  <!-- ── Auth tab ── -->
+  <div id="tab-auth" class="tab-content">
+
+    <!-- OpenAI Codex OAuth -->
+    <div class="auth-section">
+      <h3>OpenAI Codex — OAuth (PKCE)</h3>
+      <p style="font-size:.8rem;color:var(--muted)">
+        Starts a browser-based login. The callback server only works if your browser
+        runs on the same host as HA. <strong style="color:var(--orange)">Always use the paste
+        fallback below.</strong>
+      </p>
+      <div class="auth-row">
+        <button class="auth-btn" onclick="startOAuth()">Start Login</button>
+        <span id="oauth-status-text" style="font-size:.78rem;color:var(--muted)"></span>
+      </div>
+      <div class="auth-url-box" id="oauth-url-box"></div>
+      <div class="auth-row" style="gap:8px;flex-wrap:wrap;">
+        <input id="oauth-code-input" class="auth-input"
+               placeholder="Paste full redirect URL, code#state, or bare code here" />
+        <button class="auth-btn secondary" onclick="completeOAuth()">Submit Code</button>
+      </div>
+      <div class="auth-result" id="oauth-result"></div>
+    </div>
+
+    <!-- Anthropic -->
+    <div class="auth-section">
+      <h3>Anthropic</h3>
+      <div class="auth-row">
+        <label>API Key</label>
+        <input id="ant-key-input" class="auth-input" type="password"
+               placeholder="sk-ant-…" autocomplete="new-password" />
+        <button class="auth-btn" onclick="saveAnthropicKey()">Save Key</button>
+      </div>
+      <div class="auth-result" id="ant-key-result"></div>
+      <div class="auth-row">
+        <label>Setup Token</label>
+        <input id="ant-token-input" class="auth-input" type="password"
+               placeholder="Bearer token…" autocomplete="new-password" />
+        <input id="ant-expires-input" class="auth-input" style="max-width:180px;"
+               placeholder="Expires (ms epoch, optional)" />
+        <button class="auth-btn" onclick="saveAnthropicToken()">Save Token</button>
+      </div>
+      <div class="auth-result" id="ant-token-result"></div>
+    </div>
+
+    <!-- Profiles -->
+    <div class="auth-section">
+      <h3>Saved Profiles <button class="auth-btn secondary" style="margin-left:8px;padding:4px 10px;font-size:.72rem;" onclick="loadProfiles()">&#8635; Refresh</button></h3>
+      <div id="profiles-container">
+        <span style="font-size:.8rem;color:var(--muted)">Loading…</span>
+      </div>
+    </div>
+
+  </div>
+
   <script>
     const $ = id => document.getElementById(id);
     const msgs = $('messages');
@@ -432,6 +564,7 @@ _UI_HTML = """<!DOCTYPE html>
     let diagHidden = false;
     let reqCounter = 0;
     let lastAuditError = '';
+    let oauthPollInterval = null;
     const uiSessionId = Math.random().toString(36).slice(2, 10);
 
     function clip(value, maxLen = 240) {
@@ -467,6 +600,18 @@ _UI_HTML = """<!DOCTYPE html>
     const apiDetect = detectApiBase();
     const apiBase = apiDetect.base;
     const apiUrl = path => apiBase + String(path).replace(/^\\/+/, '');
+
+    // ── Tab switching ─────────────────────────────────────────────────────────
+    function switchTab(name) {
+      document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+      document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+      const content = $('tab-' + name);
+      if (content) content.classList.add('active');
+      const btns = document.querySelectorAll('.tab-btn');
+      btns.forEach(b => { if (b.textContent.trim().toLowerCase() === name) b.classList.add('active'); });
+      if (name === 'auth') loadProfiles();
+      if (name === 'audit') loadAuditFull();
+    }
 
     function appendDiagLine(line) {
       if (!diagBody) return;
@@ -642,7 +787,6 @@ _UI_HTML = """<!DOCTYPE html>
         });
       } catch(e) {
         const msg = e && e.message ? e.message : String(e);
-        // Show the error so it's visible instead of silently stuck on "Loading…"
         if (statusMsg) statusMsg.textContent = 'Could not reach add-on backend: ' + msg +
           ' — check the add-on log.';
         $('badges').innerHTML = '<span class="badge" style="background:#7f1d1d;color:#fca5a5">OFFLINE</span>';
@@ -689,6 +833,210 @@ _UI_HTML = """<!DOCTYPE html>
         }
       } finally {
         clearTimeout(timeoutId);
+      }
+    }
+
+    async function loadAuditFull() {
+      const url = apiUrl('api/audit?limit=200');
+      try {
+        const r = await fetch(url);
+        if (!r.ok) return;
+        const d = await r.json();
+        const list = $('auditListFull');
+        if (!list) return;
+        if (!d.entries || !d.entries.length) {
+          list.innerHTML = '<div class="ae" style="border:none;color:var(--muted)">No actions yet.</div>';
+          return;
+        }
+        list.innerHTML = d.entries.map(e => {
+          const t = e.timestamp
+            ? new Date(e.timestamp).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})
+            : '';
+          const confirmed = e.confirmed ? ' &#10003;' : '';
+          return '<div class="ae r-' + esc(e.risk||'read') + '">' +
+            '<span class="ae-tool">' + esc(e.tool) + confirmed + '</span>' +
+            '<span class="ae-time">' + t + '</span>' +
+            '<div class="ae-line">' + esc(e.params_summary||'') + '</div>' +
+            '<div class="ae-line" style="color:#4b5563">' + esc(e.result_summary||'') + '</div>' +
+            '</div>';
+        }).join('');
+      } catch(_e) {}
+    }
+
+    // ── Auth tab functions ────────────────────────────────────────────────────
+
+    function showAuthResult(elemId, ok, msg) {
+      const el = $(elemId);
+      if (!el) return;
+      el.className = 'auth-result ' + (ok === null ? 'info' : ok ? 'ok' : 'err');
+      el.textContent = msg;
+    }
+
+    async function startOAuth() {
+      showAuthResult('oauth-result', null, 'Starting OAuth flow…');
+      $('oauth-url-box').style.display = 'none';
+      $('oauth-status-text').textContent = '';
+      if (oauthPollInterval) { clearInterval(oauthPollInterval); oauthPollInterval = null; }
+      try {
+        const r = await fetch(apiUrl('oauth/openai-codex/start'), {method: 'POST'});
+        const d = await r.json();
+        if (!r.ok) { showAuthResult('oauth-result', false, d.detail || 'Start failed'); return; }
+        const urlBox = $('oauth-url-box');
+        urlBox.style.display = 'block';
+        urlBox.innerHTML = '<a href="' + esc(d.auth_url) + '" target="_blank" rel="noopener" style="color:#7dd3fc">' +
+          'Open this URL in your browser</a><br><small style="color:var(--muted)">' +
+          esc(d.auth_url) + '</small>';
+        const cbNote = d.callback_server_active
+          ? 'Callback server active on :1455 (auto-poll enabled).'
+          : 'Callback server unavailable — paste the redirect URL or code below.';
+        $('oauth-status-text').textContent = cbNote;
+        showAuthResult('oauth-result', null, 'Authorize in your browser, then paste the redirect URL or code below.');
+        if (d.callback_server_active) {
+          oauthPollInterval = setInterval(pollOAuthStatus, 2000);
+        }
+      } catch(e) {
+        showAuthResult('oauth-result', false, 'Network error: ' + (e.message || String(e)));
+      }
+    }
+
+    async function pollOAuthStatus() {
+      try {
+        const r = await fetch(apiUrl('oauth/openai-codex/status'));
+        const d = await r.json();
+        if (d.received) {
+          clearInterval(oauthPollInterval); oauthPollInterval = null;
+          $('oauth-status-text').textContent = 'Callback received! Exchanging tokens…';
+          await completeOAuth(true);
+        }
+      } catch(_e) {}
+    }
+
+    async function completeOAuth(fromCallback) {
+      const codeInput = fromCallback ? '' : ($('oauth-code-input').value || '').trim();
+      if (!fromCallback && !codeInput) {
+        showAuthResult('oauth-result', false, 'Please paste the redirect URL or code first.');
+        return;
+      }
+      showAuthResult('oauth-result', null, 'Exchanging tokens…');
+      try {
+        const body = fromCallback ? {input: 'callback'} : {input: codeInput};
+        const r = await fetch(apiUrl('oauth/openai-codex/complete'), {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(body)
+        });
+        const d = await r.json();
+        if (!r.ok) {
+          showAuthResult('oauth-result', false, d.detail || 'Token exchange failed');
+          return;
+        }
+        showAuthResult('oauth-result', true,
+          'Saved! Profile ' + esc(d.profileId) +
+          (d.expiresIso ? ' — expires ' + esc(d.expiresIso) : ''));
+        if (!fromCallback) $('oauth-code-input').value = '';
+        loadProfiles();
+      } catch(e) {
+        showAuthResult('oauth-result', false, 'Network error: ' + (e.message || String(e)));
+      }
+    }
+
+    async function saveAnthropicKey() {
+      const key = ($('ant-key-input').value || '').trim();
+      if (!key) { showAuthResult('ant-key-result', false, 'Key must not be empty'); return; }
+      showAuthResult('ant-key-result', null, 'Saving…');
+      try {
+        const r = await fetch(apiUrl('auth/anthropic/api-key'), {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({key})
+        });
+        const d = await r.json();
+        if (!r.ok) { showAuthResult('ant-key-result', false, d.detail || 'Error'); return; }
+        showAuthResult('ant-key-result', true, 'Saved! Profile ' + esc(d.profileId));
+        $('ant-key-input').value = '';
+        loadProfiles();
+      } catch(e) {
+        showAuthResult('ant-key-result', false, 'Network error: ' + (e.message || String(e)));
+      }
+    }
+
+    async function saveAnthropicToken() {
+      const token = ($('ant-token-input').value || '').trim();
+      if (!token) { showAuthResult('ant-token-result', false, 'Token must not be empty'); return; }
+      const expiresRaw = ($('ant-expires-input').value || '').trim();
+      const expires_ms = expiresRaw ? parseInt(expiresRaw, 10) : null;
+      showAuthResult('ant-token-result', null, 'Saving…');
+      try {
+        const r = await fetch(apiUrl('auth/anthropic/setup-token'), {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({token, expires_ms})
+        });
+        const d = await r.json();
+        if (!r.ok) { showAuthResult('ant-token-result', false, d.detail || 'Error'); return; }
+        showAuthResult('ant-token-result', true, 'Saved! Profile ' + esc(d.profileId));
+        $('ant-token-input').value = '';
+        $('ant-expires-input').value = '';
+        loadProfiles();
+      } catch(e) {
+        showAuthResult('ant-token-result', false, 'Network error: ' + (e.message || String(e)));
+      }
+    }
+
+    async function loadProfiles() {
+      const container = $('profiles-container');
+      if (!container) return;
+      try {
+        const r = await fetch(apiUrl('auth/status'));
+        const d = await r.json();
+        if (!d.profiles || !d.profiles.length) {
+          container.innerHTML = '<span style="font-size:.8rem;color:var(--muted)">No profiles saved yet.</span>';
+          return;
+        }
+        container.innerHTML = '<table class="prof-table"><thead><tr>' +
+          '<th>ID</th><th>Type</th><th>Provider</th><th>Expires</th><th>Errors</th><th>Actions</th>' +
+          '</tr></thead><tbody>' +
+          d.profiles.map(p => {
+            const expiredBadge = p.isExpired ? '<span class="expired-badge"> EXPIRED</span>' : '';
+            const expiryStr = p.expiresIso
+              ? new Date(p.expiresIso).toLocaleString([], {dateStyle:'short',timeStyle:'short'}) + (p.isExpired ? '' : '')
+              : '—';
+            return '<tr>' +
+              '<td><code style="font-size:.72rem">' + esc(p.profileId) + '</code></td>' +
+              '<td><span class="type-badge type-' + esc(p.type) + '">' + esc(p.type) + '</span></td>' +
+              '<td>' + esc(p.provider) + '</td>' +
+              '<td>' + esc(expiryStr) + expiredBadge + '</td>' +
+              '<td>' + esc(String(p.errorCount || 0)) + '</td>' +
+              '<td style="display:flex;gap:5px;">' +
+              '<button class="auth-btn secondary" style="padding:3px 9px;font-size:.7rem" onclick="testProfile(' + "'" + esc(p.profileId) + "'" + ')">Test</button>' +
+              '<button class="auth-btn danger" style="padding:3px 9px;font-size:.7rem" onclick="deleteProfile(' + "'" + esc(p.profileId) + "'" + ')">Delete</button>' +
+              '</td></tr>';
+          }).join('') +
+          '</tbody></table>';
+      } catch(e) {
+        container.innerHTML = '<span style="font-size:.8rem;color:var(--red)">Error loading profiles: ' + esc(e.message || String(e)) + '</span>';
+      }
+    }
+
+    async function testProfile(id) {
+      try {
+        const r = await fetch(apiUrl('auth/test/' + encodeURIComponent(id)), {method: 'POST'});
+        const d = await r.json();
+        alert((d.ok ? '✓ ' : '✗ ') + (d.detail || (d.ok ? 'OK' : 'Failed')));
+      } catch(e) {
+        alert('Error: ' + (e.message || String(e)));
+      }
+    }
+
+    async function deleteProfile(id) {
+      if (!confirm('Delete profile ' + id + '?')) return;
+      try {
+        const r = await fetch(apiUrl('auth/profile/' + encodeURIComponent(id)), {method: 'DELETE'});
+        const d = await r.json();
+        if (r.ok) loadProfiles();
+        else alert('Error: ' + (d.detail || 'Delete failed'));
+      } catch(e) {
+        alert('Error: ' + (e.message || String(e)));
       }
     }
 

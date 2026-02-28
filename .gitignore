@@ -25,3 +25,5 @@ secrets.yaml
 
 # HA data dir (only exists at runtime in the container)
 data/
+
+CLAUDE.md

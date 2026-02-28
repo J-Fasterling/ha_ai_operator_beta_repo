@@ -307,15 +307,67 @@ class AnthropicClient(BaseLLMClient):
             return self._response_to_openai(r.json())
 
 
+# ── Store fallback (sync, no refresh) ─────────────────────────────────────────
+
+def _resolve_from_store(provider: str) -> tuple[str, str]:
+    """Read credentials directly from the auth store (sync, no token refresh).
+
+    Returns (api_key, oauth_token). Falls back to empty strings on any error.
+    Cannot call asyncio.run() — already running inside Uvicorn's event loop.
+    """
+    try:
+        from auth.store import get_store
+        store = get_store()
+        data = store.load()
+        import time
+        now_ms = int(time.time() * 1000)
+
+        candidates = []
+        last_good = data.lastGood.get(provider)
+        if last_good and last_good in data.profiles:
+            candidates.append(last_good)
+        for pid in data.order.get(provider, []):
+            if pid in data.profiles and pid not in candidates:
+                candidates.append(pid)
+
+        for pid in candidates:
+            raw = data.profiles[pid]
+            ctype = raw.get("type")
+            if ctype == "api_key":
+                return raw.get("key", ""), ""
+            elif ctype == "token":
+                expires = raw.get("expires")
+                if expires and expires < now_ms:
+                    continue
+                return "", raw.get("token", "")
+            elif ctype == "oauth":
+                expires = raw.get("expires", 0)
+                if expires < now_ms:
+                    continue  # Expired; skip (no refresh in sync path)
+                return "", raw.get("access", "")
+    except Exception:
+        pass
+    return "", ""
+
+
 # ── Factory ───────────────────────────────────────────────────────────────────
 
 def make_llm_client() -> BaseLLMClient:
-    """Instantiate the correct LLM client from environment variables."""
+    """Instantiate the correct LLM client from environment variables.
+
+    If LLM_API_KEY and LLM_OAUTH_TOKEN are both empty, falls back to reading
+    credentials from the auth store (sync read only, no token refresh).
+    """
     provider = os.environ.get("LLM_PROVIDER", "openai_compatible")
     base_url = os.environ.get("LLM_BASE_URL", "")
     api_key = os.environ.get("LLM_API_KEY", "")
     auth_mode = os.environ.get("OPENAI_AUTH_MODE", "api_key")
     oauth_token = os.environ.get("LLM_OAUTH_TOKEN", "")
+
+    # Fall back to store if env vars are empty
+    if not api_key and not oauth_token:
+        store_provider = "anthropic" if provider == "anthropic" else "openai-codex"
+        api_key, oauth_token = _resolve_from_store(store_provider)
 
     if provider == "anthropic":
         return AnthropicClient(api_key=api_key)
