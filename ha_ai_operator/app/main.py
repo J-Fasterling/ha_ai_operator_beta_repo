@@ -268,6 +268,18 @@ _UI_HTML = """<!DOCTYPE html>
     const sendBtn = $('sendBtn');
     let history = [];
 
+    function detectApiBase() {
+      const p = window.location.pathname;
+      // Home Assistant ingress path: /api/hassio_ingress/<slug>
+      const m = p.match(/^(.*\/api\/hassio_ingress\/[^/]+)\/?/);
+      if (m) return m[1] + '/';
+      if (p === '/') return '/';
+      return p.endsWith('/') ? p : p + '/';
+    }
+
+    const apiBase = detectApiBase();
+    const apiUrl = path => apiBase + String(path).replace(/^\/+/, '');
+
     function esc(t) {
       return String(t)
         .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -295,7 +307,7 @@ _UI_HTML = """<!DOCTYPE html>
       addMsg('user', text);
       history.push({role:'user', content:text});
       try {
-        const r = await fetch('v1/chat/completions', {
+        const r = await fetch(apiUrl('v1/chat/completions'), {
           method: 'POST',
           headers: {'Content-Type':'application/json'},
           body: JSON.stringify({model:'ha-agent', messages:history, temperature:0.7})
@@ -317,7 +329,7 @@ _UI_HTML = """<!DOCTYPE html>
 
     async function loadStatus() {
       try {
-        const r = await fetch('health');
+        const r = await fetch(apiUrl('health'));
         const d = await r.json();
         const badgesEl = $('badges');
         badgesEl.innerHTML = `
@@ -336,7 +348,7 @@ _UI_HTML = """<!DOCTYPE html>
 
     async function loadAudit() {
       try {
-        const r = await fetch('api/audit?limit=50');
+        const r = await fetch(apiUrl('api/audit?limit=50'));
         const d = await r.json();
         if (!d.entries.length) return;
         $('auditList').innerHTML = d.entries.map(e => {
