@@ -7,6 +7,7 @@
 | `timezone` | string | `Europe/Berlin` | IANA timezone for the container |
 | `mode` | enum | `read_only` | Operating mode (see below) |
 | `llm_provider` | enum | `openai_compatible` | LLM backend |
+| `llm_model` | string? | *(empty)* | Concrete provider model name used for UI alias `ha-agent` |
 | `openai_auth_mode` | enum | `api_key` | `api_key` or `codex_oauth` (OpenAI-compatible only) |
 | `llm_base_url` | string? | *(empty)* | LLM API base URL |
 | `llm_api_key` | password? | *(empty)* | LLM API key — never logged |
@@ -71,6 +72,7 @@ Tokens expire if the server restarts (they are stored in `/data/state/pending_pl
 
 ```yaml
 llm_provider: "openai_compatible"
+llm_model: "gpt-4o-mini"
 openai_auth_mode: "api_key"
 llm_base_url: "https://api.groq.com/openai/v1"   # example: Groq
 llm_api_key: "gsk_…"
@@ -81,6 +83,7 @@ llm_oauth_token: null
 
 ```yaml
 llm_provider: "openai_compatible"
+llm_model: "gpt-4o-mini"
 openai_auth_mode: "codex_oauth"
 llm_base_url: "https://api.openai.com/v1"
 llm_api_key: null
@@ -108,6 +111,7 @@ Note: the access token is temporary. If you see authentication failures, fetch a
 
 ```yaml
 llm_provider: "ollama"
+llm_model: "llama3.1"
 openai_auth_mode: "api_key"
 llm_base_url: "http://192.168.1.50:11434/v1"
 llm_api_key: null
@@ -120,6 +124,7 @@ Recommended models with tool-calling support: `llama3.1`, `mistral-nemo`, `qwen2
 
 ```yaml
 llm_provider: "custom_http"
+llm_model: "my-tool-model"
 openai_auth_mode: "api_key"
 llm_base_url: "http://my-llm-proxy:8080/v1"
 llm_api_key: "my-key"
@@ -127,6 +132,12 @@ llm_oauth_token: null
 ```
 
 The endpoint must implement `POST /chat/completions` with OpenAI tool-call format.
+
+### Model alias behavior (`ha-agent`)
+
+The Ingress UI sends `model: "ha-agent"` by default. The backend treats this as an
+internal alias and maps it to `llm_model`. If `llm_model` is empty, chat requests
+cannot be executed.
 
 ---
 

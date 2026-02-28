@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 from datetime import datetime
 from typing import Any, Optional
@@ -179,11 +180,15 @@ _TOOLS_SUPERVISOR: list[dict] = [
 
 # ── Agent ─────────────────────────────────────────────────────────────────────
 
+log = logging.getLogger("ha_ai_operator.agent")
+
+
 class Agent:
     def __init__(self) -> None:
         self._policy = PolicyEngine()
         self._llm: BaseLLMClient = make_llm_client()
         self._mode = os.environ.get("MODE", "read_only")
+        self._configured_model = os.environ.get("LLM_MODEL", "").strip()
         self._allow_sup = os.environ.get("ALLOW_SUPERVISOR_API", "false").lower() == "true"
 
     # ── helpers ───────────────────────────────────────────────────────────────
@@ -211,6 +216,19 @@ class Agent:
     def _confirmation_token(self, plan_data: dict) -> str:
         raw = json.dumps(plan_data, sort_keys=True)
         return hashlib.sha256(raw.encode()).hexdigest()[:20]
+
+    def _resolve_model(self, requested_model: str | None) -> str:
+        """Resolve API model value to an upstream provider model name.
+
+        The UI sends `ha-agent` as an internal alias. That alias must map to
+        a concrete provider model via `LLM_MODEL`.
+        """
+        requested = (requested_model or "").strip()
+        if requested and requested != "ha-agent":
+            return requested
+        if self._configured_model:
+            return self._configured_model
+        return ""
 
     def _audit(
         self,
@@ -325,10 +343,27 @@ class Agent:
         ]
 
         tools = self._tools()
-        model = request.model or "ha-agent"
+        model = self._resolve_model(request.model)
+        if not model:
+            log.error(
+                "No upstream model configured; requested=%s configured_model_set=%s",
+                request.model,
+                bool(self._configured_model),
+            )
+            return (
+                "LLM model is not configured. The UI alias `ha-agent` requires "
+                "`llm_model` in add-on configuration (for example `gpt-4o-mini`). "
+                "Alternatively call `/v1/chat/completions` with an explicit provider model name."
+            )
         temperature = request.temperature if request.temperature is not None else 0.7
         actions_taken = 0
         max_actions = self._policy.max_actions_count()
+        log.info(
+            "Agent run start requested_model=%s resolved_model=%s mode=%s",
+            request.model,
+            model,
+            self._mode,
+        )
 
         # ── Agent loop ────────────────────────────────────────────────────────
         while actions_taken < max_actions:

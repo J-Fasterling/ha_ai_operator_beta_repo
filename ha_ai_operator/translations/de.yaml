@@ -18,6 +18,12 @@ configuration:
       ollama: lokale Ollama-Instanz (Standard-URL http://localhost:11434/v1).
       custom_http: eigener OpenAI-kompatibler Endpunkt; llm_base_url entsprechend setzen.
       anthropic: Anthropic Claude-Modelle via api.anthropic.com (x-api-key-Auth, /v1/messages-Endpoint).
+  llm_model:
+    name: LLM-Modell
+    description: >-
+      Konkreter Upstream-Modellname fuer den Add-on-Betrieb (z.B. gpt-4o-mini, llama3.1, claude-3-5-sonnet-latest).
+      Die UI sendet den internen Alias "ha-agent"; dieser Alias wird auf diesen Wert abgebildet.
+      Wenn leer, koennen UI-Anfragen nicht ausgefuehrt werden, weil kein Provider-Modell ausgewaehlt werden kann.
   openai_auth_mode:
     name: OpenAI-Auth-Modus
     description: >-

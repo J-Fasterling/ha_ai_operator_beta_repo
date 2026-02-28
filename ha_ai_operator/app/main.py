@@ -127,6 +127,8 @@ async def health(request: Request) -> dict[str, Any]:
         "version": "0.1.0",
         "mode": os.environ.get("MODE", "unknown"),
         "llm_provider": os.environ.get("LLM_PROVIDER", "unknown"),
+        "llm_model": os.environ.get("LLM_MODEL", ""),
+        "llm_model_set": bool(os.environ.get("LLM_MODEL", "")),
         "llm_base_url_set": bool(os.environ.get("LLM_BASE_URL", "")),
         "llm_api_key_set": bool(os.environ.get("LLM_API_KEY", "")),
         "allow_supervisor_api": os.environ.get("ALLOW_SUPERVISOR_API", "false"),
@@ -136,10 +138,11 @@ async def health(request: Request) -> dict[str, Any]:
         "app_log_level": os.environ.get("APP_LOG_LEVEL", "info"),
     }
     log.info(
-        "[req:%s] health payload mode=%s provider=%s app_log_level=%s sup_api=%s",
+        "[req:%s] health payload mode=%s provider=%s model=%s app_log_level=%s sup_api=%s",
         _request_id(request),
         payload["mode"],
         payload["llm_provider"],
+        payload["llm_model"] or "<unset>",
         payload["app_log_level"],
         payload["allow_supervisor_api"],
     )
@@ -626,12 +629,15 @@ _UI_HTML = """<!DOCTYPE html>
           (d.allow_supervisor_api === 'true' ? '<span class="badge badge-sup">SUPERVISOR</span>' : '');
         if (statusMsg) statusMsg.textContent =
           'Mode: ' + d.mode + ' | Provider: ' + d.llm_provider +
+          ' | Model: ' + (d.llm_model || '<unset>') +
           ' | Confirmation: ' + d.confirmation_required +
           ' | Max actions: ' + d.max_actions_per_turn;
         logEvent('info', 'health.loaded', 'Configuration loaded', {
           reqId: req.reqId,
           mode: d.mode,
           provider: d.llm_provider,
+          model: d.llm_model || '',
+          model_set: !!d.llm_model_set,
           app_log_level: d.app_log_level || 'n/a'
         });
       } catch(e) {

@@ -14,6 +14,13 @@ export MAX_ACTIONS_PER_TURN="$(bashio::config 'max_actions_per_turn')"
 export AUDIT_LOG_LEVEL="$(bashio::config 'audit_log_level')"
 export APP_LOG_LEVEL="$(bashio::config 'app_log_level')"
 
+if bashio::config.has_value 'llm_model'; then
+    export LLM_MODEL
+    LLM_MODEL="$(bashio::config 'llm_model')"
+else
+    export LLM_MODEL=""
+fi
+
 if bashio::config.has_value 'openai_auth_mode'; then
     export OPENAI_AUTH_MODE
     OPENAI_AUTH_MODE="$(bashio::config 'openai_auth_mode')"
@@ -49,6 +56,7 @@ fi
 # ── Safe startup log (no secrets) ─────────────────────────────────────────────
 bashio::log.info "Mode              : ${MODE}"
 bashio::log.info "LLM provider      : ${LLM_PROVIDER}"
+bashio::log.info "LLM model         : $([ -n "${LLM_MODEL}" ] && echo "${LLM_MODEL}" || echo "<unset: alias ha-agent>")"
 bashio::log.info "OpenAI auth mode  : ${OPENAI_AUTH_MODE}"
 bashio::log.info "LLM base URL set  : $([ -n "${LLM_BASE_URL}"  ] && echo yes || echo no)"
 bashio::log.info "LLM API key set   : $([ -n "${LLM_API_KEY}"   ] && echo yes || echo no)"

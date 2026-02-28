@@ -56,6 +56,7 @@ Important: this access token can expire. If requests start failing with auth err
 timezone: "Europe/Berlin"
 mode: "control_assist"
 llm_provider: "ollama"
+llm_model: "llama3.1"
 openai_auth_mode: "api_key"
 llm_base_url: "http://192.168.1.50:11434/v1"
 llm_api_key: null
@@ -65,6 +66,9 @@ max_actions_per_turn: 5
 audit_log_level: "minimal"
 app_log_level: "info"
 ```
+
+Note: The UI uses the internal model alias `ha-agent`. Set `llm_model` so this
+alias resolves to a real provider model.
 
 ## Security
 

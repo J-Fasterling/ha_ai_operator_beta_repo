@@ -5,6 +5,21 @@ Versions on the `beta` remote are test releases; `origin/main` carries stable re
 
 ---
 
+## [0.1.1-beta.7] – 2026-02-28
+
+### Fixed
+- **Chat requests failed with `model_not_found` for `ha-agent`** — introduced
+  `llm_model` configuration and mapped UI alias `ha-agent` to this concrete
+  provider model at runtime.
+- Added explicit error text when no upstream model is configured instead of
+  forwarding opaque provider errors.
+
+### Changed
+- `/health` now reports `llm_model` and whether it is set, and the UI status line
+  shows the resolved model configuration.
+
+---
+
 ## [0.1.1-beta.6] – 2026-02-28
 
 ### Fixed
