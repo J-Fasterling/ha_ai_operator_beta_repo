@@ -15,13 +15,14 @@ Soul resolution order
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
 from schemas import AuditLogEntry
 
-_DATA = Path("/data")
+_DATA = Path(os.environ.get("DATA_DIR", "/data"))
 _STATE = _DATA / "state"
 _MEMORY = _DATA / "memory"
 _CKPT = _DATA / "checkpoints"
@@ -38,7 +39,7 @@ def ensure_dirs() -> None:
 # ── Soul / character file ─────────────────────────────────────────────────────
 
 _USER_SOUL = _DATA / "soul.md"
-_DEFAULT_SOUL = Path("/app/default_soul.md")
+_DEFAULT_SOUL = Path(os.environ.get("APP_DIR", "/app")) / "default_soul.md"
 
 
 def load_soul() -> str:

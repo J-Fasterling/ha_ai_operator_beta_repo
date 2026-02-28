@@ -268,17 +268,15 @@ _UI_HTML = """<!DOCTYPE html>
     const sendBtn = $('sendBtn');
     let history = [];
 
-    function detectApiBase() {
-      const p = window.location.pathname;
-      // Home Assistant ingress path: /api/hassio_ingress/<slug>
-      const m = p.match(/^(.*\/api\/hassio_ingress\/[^/]+)\/?/);
-      if (m) return m[1] + '/';
-      if (p === '/') return '/';
-      return p.endsWith('/') ? p : p + '/';
-    }
-
-    const apiBase = detectApiBase();
-    const apiUrl = path => apiBase + String(path).replace(/^\/+/, '');
+    // ── URL helpers ──────────────────────────────────────────────────────────
+    // Always use bare relative URLs (no leading slash).
+    // Browser resolves them against window.location, so:
+    //   page = https://ha/api/hassio_ingress/TOKEN/
+    //   fetch('health') → https://ha/api/hassio_ingress/TOKEN/health
+    //                   → HA strips prefix → GET /health on add-on ✓
+    // This works correctly in ALL HA Ingress, reverse-proxy, and direct setups.
+    // DO NOT use detectApiBase() or absolute paths here – they break when
+    // window.location.pathname does not contain /api/hassio_ingress/.
 
     function esc(t) {
       return String(t)
@@ -307,7 +305,7 @@ _UI_HTML = """<!DOCTYPE html>
       addMsg('user', text);
       history.push({role:'user', content:text});
       try {
-        const r = await fetch(apiUrl('v1/chat/completions'), {
+        const r = await fetch('v1/chat/completions', {
           method: 'POST',
           headers: {'Content-Type':'application/json'},
           body: JSON.stringify({model:'ha-agent', messages:history, temperature:0.7})
@@ -328,42 +326,46 @@ _UI_HTML = """<!DOCTYPE html>
     }
 
     async function loadStatus() {
+      const statusMsg = msgs.querySelector('.msg.system');
       try {
-        const r = await fetch(apiUrl('health'));
+        const r = await fetch('health');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
         const d = await r.json();
-        const badgesEl = $('badges');
-        badgesEl.innerHTML = `
-          <span class="badge badge-${esc(d.mode)}">${esc(d.mode).toUpperCase()}</span>
-          <span class="badge badge-prov">${esc(d.llm_provider)}</span>
-          ${d.allow_supervisor_api === 'true'
-            ? '<span class="badge badge-sup">SUPERVISOR</span>' : ''}
-        `;
-        // Update welcome message
-        msgs.querySelector('.msg.system').textContent =
-          `Mode: ${d.mode} | Provider: ${d.llm_provider} | ` +
-          `Confirmation: ${d.confirmation_required} | ` +
-          `Max actions: ${d.max_actions_per_turn}`;
-      } catch(e) { /* ignore */ }
+        $('badges').innerHTML =
+          '<span class="badge badge-' + esc(d.mode) + '">' + esc(d.mode).toUpperCase() + '</span>' +
+          '<span class="badge badge-prov">' + esc(d.llm_provider) + '</span>' +
+          (d.allow_supervisor_api === 'true' ? '<span class="badge badge-sup">SUPERVISOR</span>' : '');
+        if (statusMsg) statusMsg.textContent =
+          'Mode: ' + d.mode + ' | Provider: ' + d.llm_provider +
+          ' | Confirmation: ' + d.confirmation_required +
+          ' | Max actions: ' + d.max_actions_per_turn;
+      } catch(e) {
+        // Show the error so it's visible instead of silently stuck on "Loading…"
+        if (statusMsg) statusMsg.textContent = 'Could not reach add-on backend: ' + e.message +
+          ' — check the add-on log.';
+        $('badges').innerHTML = '<span class="badge" style="background:#7f1d1d;color:#fca5a5">OFFLINE</span>';
+      }
     }
 
     async function loadAudit() {
       try {
-        const r = await fetch(apiUrl('api/audit?limit=50'));
+        const r = await fetch('api/audit?limit=50');
+        if (!r.ok) return;
         const d = await r.json();
-        if (!d.entries.length) return;
+        if (!d.entries || !d.entries.length) return;
         $('auditList').innerHTML = d.entries.map(e => {
           const t = e.timestamp
             ? new Date(e.timestamp).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})
             : '';
           const confirmed = e.confirmed ? ' &#10003;' : '';
-          return `<div class="ae r-${esc(e.risk||'read')}">
-            <span class="ae-tool">${esc(e.tool)}${confirmed}</span>
-            <span class="ae-time">${t}</span>
-            <div class="ae-line">${esc(e.params_summary||'')}</div>
-            <div class="ae-line" style="color:#4b5563">${esc(e.result_summary||'')}</div>
-          </div>`;
+          return '<div class="ae r-' + esc(e.risk||'read') + '">' +
+            '<span class="ae-tool">' + esc(e.tool) + confirmed + '</span>' +
+            '<span class="ae-time">' + t + '</span>' +
+            '<div class="ae-line">' + esc(e.params_summary||'') + '</div>' +
+            '<div class="ae-line" style="color:#4b5563">' + esc(e.result_summary||'') + '</div>' +
+            '</div>';
         }).join('');
-      } catch(e) { /* ignore */ }
+      } catch(e) { /* network error – silently skip audit refresh */ }
     }
 
     input.addEventListener('keydown', e => {
