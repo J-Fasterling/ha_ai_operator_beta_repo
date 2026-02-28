@@ -5,6 +5,15 @@ Versions on the `beta` remote are test releases; `origin/main` carries stable re
 
 ---
 
+## [0.1.1-beta.6] – 2026-02-28
+
+### Fixed
+- **Ingress UI diagnostics/startup script failed to execute** — corrected escaping in
+  embedded JavaScript (regex/newline sequences) so the script parses in-browser.
+  This unblocks `loadStatus()`/`/health` requests and frontend log forwarding.
+
+---
+
 ## [0.1.1-beta.5] – 2026-02-28
 
 ### Added
