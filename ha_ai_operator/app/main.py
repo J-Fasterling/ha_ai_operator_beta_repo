@@ -450,11 +450,11 @@ _UI_HTML = """<!DOCTYPE html>
     // ── URL helpers ──────────────────────────────────────────────────────────
     function detectApiBase() {
       const p = window.location.pathname || '/';
-      const ingress = p.match(/^\/api\/hassio_ingress\/([^/]+)/);
+      const ingress = p.match(/^\\/api\\/hassio_ingress\\/([^/]+)/);
       if (ingress) {
         return {base: '/api/hassio_ingress/' + ingress[1] + '/', reason: 'ingress_path'};
       }
-      const slugOnly = p.match(/^\/([^/]+)\/?$/);
+      const slugOnly = p.match(/^\\/([^/]+)\\/?$/);
       if (slugOnly) {
         return {base: '/api/hassio_ingress/' + slugOnly[1] + '/', reason: 'slug_path'};
       }
@@ -463,16 +463,16 @@ _UI_HTML = """<!DOCTYPE html>
     }
     const apiDetect = detectApiBase();
     const apiBase = apiDetect.base;
-    const apiUrl = path => apiBase + String(path).replace(/^\/+/, '');
+    const apiUrl = path => apiBase + String(path).replace(/^\\/+/, '');
 
     function appendDiagLine(line) {
       if (!diagBody) return;
       const hadDefault = diagBody.textContent === 'Initializing diagnostics…';
       if (hadDefault) diagBody.textContent = '';
-      diagBody.textContent += (diagBody.textContent ? '\n' : '') + line;
-      const lines = diagBody.textContent.split('\n');
+      diagBody.textContent += (diagBody.textContent ? '\\n' : '') + line;
+      const lines = diagBody.textContent.split('\\n');
       if (lines.length > 120) {
-        diagBody.textContent = lines.slice(lines.length - 120).join('\n');
+        diagBody.textContent = lines.slice(lines.length - 120).join('\\n');
       }
       diagBody.scrollTop = diagBody.scrollHeight;
     }
@@ -531,8 +531,8 @@ _UI_HTML = """<!DOCTYPE html>
     }
     function fmt(t) {
       return esc(t)
-        .replace(/`([^`\n]+)`/g, '<code>$1</code>')
-        .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+        .replace(/`([^`\\n]+)`/g, '<code>$1</code>')
+        .replace(/\\*\\*([^*\\n]+)\\*\\*/g, '<strong>$1</strong>');
     }
 
     function addMsg(role, content) {
