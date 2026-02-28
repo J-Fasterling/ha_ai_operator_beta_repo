@@ -5,6 +5,22 @@ Versions on the `beta` remote are test releases; `origin/main` carries stable re
 
 ---
 
+## [0.1.1-beta.4] – 2026-02-28
+
+### Fixed
+- **Ingress API routing regression in chat UI** — reverted from bare relative
+  `fetch('health')`/`fetch('api/audit')` calls to explicit `apiBase` resolution.
+  The previous approach broke when HA served the panel under `/<slug>` (no
+  trailing slash), causing requests to resolve to wrong paths and leaving the UI
+  stuck at "Loading configuration…".
+- Added robust base-path detection for both URL shapes:
+  - `/api/hassio_ingress/<slug>/...`
+  - `/<slug>` (mapped to `/api/hassio_ingress/<slug>/...`)
+- Health error output now includes the resolved request URL to speed up ingress
+  diagnostics.
+
+---
+
 ## [0.1.1-beta.3] – 2026-02-28
 
 ### Fixed

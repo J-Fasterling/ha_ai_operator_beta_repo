@@ -269,14 +269,17 @@ _UI_HTML = """<!DOCTYPE html>
     let history = [];
 
     // ── URL helpers ──────────────────────────────────────────────────────────
-    // Always use bare relative URLs (no leading slash).
-    // Browser resolves them against window.location, so:
-    //   page = https://ha/api/hassio_ingress/TOKEN/
-    //   fetch('health') → https://ha/api/hassio_ingress/TOKEN/health
-    //                   → HA strips prefix → GET /health on add-on ✓
-    // This works correctly in ALL HA Ingress, reverse-proxy, and direct setups.
-    // DO NOT use detectApiBase() or absolute paths here – they break when
-    // window.location.pathname does not contain /api/hassio_ingress/.
+    function detectApiBase() {
+      const p = window.location.pathname || '/';
+      const ingress = p.match(/^\/api\/hassio_ingress\/([^/]+)/);
+      if (ingress) return '/api/hassio_ingress/' + ingress[1] + '/';
+      const slugOnly = p.match(/^\/([^/]+)\/?$/);
+      if (slugOnly) return '/api/hassio_ingress/' + slugOnly[1] + '/';
+      if (p === '/') return '/';
+      return p.endsWith('/') ? p : p + '/';
+    }
+    const apiBase = detectApiBase();
+    const apiUrl = path => apiBase + String(path).replace(/^\/+/, '');
 
     function esc(t) {
       return String(t)
@@ -305,7 +308,7 @@ _UI_HTML = """<!DOCTYPE html>
       addMsg('user', text);
       history.push({role:'user', content:text});
       try {
-        const r = await fetch('v1/chat/completions', {
+        const r = await fetch(apiUrl('v1/chat/completions'), {
           method: 'POST',
           headers: {'Content-Type':'application/json'},
           body: JSON.stringify({model:'ha-agent', messages:history, temperature:0.7})
@@ -328,8 +331,9 @@ _UI_HTML = """<!DOCTYPE html>
     async function loadStatus() {
       const statusMsg = msgs.querySelector('.msg.system');
       try {
-        const r = await fetch('health');
-        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const healthUrl = apiUrl('health');
+        const r = await fetch(healthUrl);
+        if (!r.ok) throw new Error('HTTP ' + r.status + ' @ ' + healthUrl);
         const d = await r.json();
         $('badges').innerHTML =
           '<span class="badge badge-' + esc(d.mode) + '">' + esc(d.mode).toUpperCase() + '</span>' +
@@ -349,7 +353,7 @@ _UI_HTML = """<!DOCTYPE html>
 
     async function loadAudit() {
       try {
-        const r = await fetch('api/audit?limit=50');
+        const r = await fetch(apiUrl('api/audit?limit=50'));
         if (!r.ok) return;
         const d = await r.json();
         if (!d.entries || !d.entries.length) return;
