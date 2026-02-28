@@ -15,6 +15,7 @@
 | `confirmation_required` | bool | `true` | Ask before executing risky actions |
 | `max_actions_per_turn` | int | `5` | Max HA calls per agent response |
 | `audit_log_level` | enum | `minimal` | `minimal` or `verbose` |
+| `app_log_level` | enum | `info` | Backend log verbosity: `debug`, `info`, `warning`, `error` |
 
 ---
 
@@ -152,6 +153,7 @@ If you need the Supervisor socket (e.g. for add-on management), manually edit
 | `GET` | `/health` | JSON status (mode, provider, flags) |
 | `POST` | `/v1/chat/completions` | OpenAI-compatible agent endpoint |
 | `GET` | `/api/audit?limit=N` | Last N audit log entries (JSON) |
+| `POST` | `/api/frontend-log` | Client-side diagnostics events from the Ingress UI |
 | `GET` | `/debug/selftest` | Connectivity and config checks |
 | `GET` | `/api/docs` | Swagger UI |
 

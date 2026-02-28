@@ -12,6 +12,7 @@ export ALLOW_SUPERVISOR_API="$(bashio::config 'allow_supervisor_api')"
 export CONFIRMATION_REQUIRED="$(bashio::config 'confirmation_required')"
 export MAX_ACTIONS_PER_TURN="$(bashio::config 'max_actions_per_turn')"
 export AUDIT_LOG_LEVEL="$(bashio::config 'audit_log_level')"
+export APP_LOG_LEVEL="$(bashio::config 'app_log_level')"
 
 if bashio::config.has_value 'openai_auth_mode'; then
     export OPENAI_AUTH_MODE
@@ -56,6 +57,7 @@ bashio::log.info "Supervisor API    : ${ALLOW_SUPERVISOR_API}"
 bashio::log.info "Confirmation req. : ${CONFIRMATION_REQUIRED}"
 bashio::log.info "Max actions/turn  : ${MAX_ACTIONS_PER_TURN}"
 bashio::log.info "Audit log level   : ${AUDIT_LOG_LEVEL}"
+bashio::log.info "App log level     : ${APP_LOG_LEVEL}"
 
 # ── Persistent data directories ───────────────────────────────────────────────
 mkdir -p /data/state /data/memory /data/checkpoints
@@ -67,5 +69,4 @@ exec python3 -m uvicorn main:app \
     --host 0.0.0.0 \
     --port 8099 \
     --workers 1 \
-    --log-level info \
-    --no-access-log
+    --log-level "${APP_LOG_LEVEL}"

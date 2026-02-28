@@ -5,6 +5,22 @@ Versions on the `beta` remote are test releases; `origin/main` carries stable re
 
 ---
 
+## [0.1.1-beta.5] – 2026-02-28
+
+### Added
+- **End-to-end startup diagnostics for Ingress UI loading issues**:
+  - Structured backend request logging with request IDs, status codes, and durations.
+  - New `POST /api/frontend-log` endpoint so browser-side events are written into add-on logs.
+  - Frontend diagnostics panel showing recent boot/load events directly in the UI.
+  - Frontend error hooks (`window.onerror`, `unhandledrejection`) plus traced health fetch logging.
+- New add-on option `app_log_level` (`debug|info|warning|error`) to control backend logging verbosity.
+
+### Changed
+- `run.sh` now starts uvicorn with the configured `app_log_level` and keeps access logging enabled.
+- `/health` now also reports `app_log_level` for easier runtime verification.
+
+---
+
 ## [0.1.1-beta.4] – 2026-02-28
 
 ### Fixed

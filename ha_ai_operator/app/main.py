@@ -10,14 +10,20 @@ GET  /debug/selftest → Connectivity / config checks
 """
 from __future__ import annotations
 
+import json
+import logging
 import os
+import time
+import uuid
 from typing import Any
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel, Field
 
 from agent import Agent
+from logging_utils import configure_logging, sanitize_for_log
 from schemas import (
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -39,13 +45,84 @@ app = FastAPI(
 )
 
 ensure_dirs()
+configure_logging()
+log = logging.getLogger("ha_ai_operator.main")
+
+
+class FrontendLogEvent(BaseModel):
+    level: str = "info"
+    event: str = "ui.event"
+    message: str = ""
+    context: dict[str, Any] = Field(default_factory=dict)
+    ts: str = ""
+    url: str = ""
+    session_id: str = ""
+
+
+def _request_id(request: Request) -> str:
+    return str(getattr(request.state, "request_id", "-"))
+
+
+def _frontend_log_fn(level: str) -> Any:
+    normalized = (level or "info").strip().lower()
+    if normalized == "debug":
+        return log.debug
+    if normalized in ("warn", "warning"):
+        return log.warning
+    if normalized == "error":
+        return log.error
+    return log.info
+
+
+@app.middleware("http")
+async def request_logging_middleware(request: Request, call_next: Any) -> Any:
+    request_id = request.headers.get("x-request-id") or uuid.uuid4().hex[:12]
+    request.state.request_id = request_id
+    started = time.perf_counter()
+    path = request.url.path
+    if request.url.query:
+        path = f"{path}?{request.url.query}"
+    client_host = request.client.host if request.client else "-"
+    user_agent = (request.headers.get("user-agent", "-") or "-")[:160]
+    log.info(
+        "[req:%s] %s %s start client=%s ua=%s",
+        request_id,
+        request.method,
+        path,
+        client_host,
+        user_agent,
+    )
+    try:
+        response = await call_next(request)
+    except Exception:
+        duration_ms = (time.perf_counter() - started) * 1000
+        log.exception(
+            "[req:%s] %s %s failed duration_ms=%.1f",
+            request_id,
+            request.method,
+            path,
+            duration_ms,
+        )
+        raise
+
+    duration_ms = (time.perf_counter() - started) * 1000
+    response.headers["X-Request-ID"] = request_id
+    log.info(
+        "[req:%s] %s %s done status=%s duration_ms=%.1f",
+        request_id,
+        request.method,
+        path,
+        response.status_code,
+        duration_ms,
+    )
+    return response
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
 
 @app.get("/health")
-async def health() -> dict[str, Any]:
-    return {
+async def health(request: Request) -> dict[str, Any]:
+    payload = {
         "status": "ok",
         "version": "0.1.0",
         "mode": os.environ.get("MODE", "unknown"),
@@ -56,19 +133,41 @@ async def health() -> dict[str, Any]:
         "confirmation_required": os.environ.get("CONFIRMATION_REQUIRED", "true"),
         "max_actions_per_turn": os.environ.get("MAX_ACTIONS_PER_TURN", "5"),
         "audit_log_level": os.environ.get("AUDIT_LOG_LEVEL", "minimal"),
+        "app_log_level": os.environ.get("APP_LOG_LEVEL", "info"),
     }
+    log.info(
+        "[req:%s] health payload mode=%s provider=%s app_log_level=%s sup_api=%s",
+        _request_id(request),
+        payload["mode"],
+        payload["llm_provider"],
+        payload["app_log_level"],
+        payload["allow_supervisor_api"],
+    )
+    return payload
 
 
 # ── Chat completions ──────────────────────────────────────────────────────────
 
 @app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
-async def chat_completions(req: ChatCompletionRequest) -> ChatCompletionResponse:
+async def chat_completions(
+    req: ChatCompletionRequest, request: Request
+) -> ChatCompletionResponse:
+    req_id = _request_id(request)
+    log.info(
+        "[req:%s] chat start model=%s messages=%s temperature=%s",
+        req_id,
+        req.model,
+        len(req.messages),
+        req.temperature,
+    )
     agent = Agent()
     try:
         content = await agent.process(req)
     except Exception as exc:
+        log.exception("[req:%s] chat failed", req_id)
         raise HTTPException(status_code=500, detail=f"Agent error: {exc}") from exc
 
+    log.info("[req:%s] chat done reply_chars=%s", req_id, len(content or ""))
     return ChatCompletionResponse(
         model=req.model,
         choices=[
@@ -85,16 +184,41 @@ async def chat_completions(req: ChatCompletionRequest) -> ChatCompletionResponse
 # ── Audit log ─────────────────────────────────────────────────────────────────
 
 @app.get("/api/audit")
-async def get_audit(limit: int = 50) -> dict[str, Any]:
+async def get_audit(request: Request, limit: int = 50) -> dict[str, Any]:
     limit = max(1, min(limit, 500))
     entries = read_audit(limit=limit)
+    log.info(
+        "[req:%s] audit fetched limit=%s returned=%s",
+        _request_id(request),
+        limit,
+        len(entries),
+    )
     return {"entries": entries, "count": len(entries)}
+
+
+@app.post("/api/frontend-log")
+async def frontend_log(event: FrontendLogEvent, request: Request) -> dict[str, bool]:
+    req_id = _request_id(request)
+    fn = _frontend_log_fn(event.level)
+    safe_context = sanitize_for_log(event.context)
+    safe_message = sanitize_for_log(event.message)
+    fn(
+        "[req:%s] [frontend session=%s] event=%s message=%s ts=%s url=%s context=%s",
+        req_id,
+        (event.session_id or "-")[:32],
+        (event.event or "ui.event")[:96],
+        str(safe_message)[:280],
+        (event.ts or "-")[:48],
+        (event.url or "-")[:220],
+        json.dumps(safe_context, default=str)[:1200],
+    )
+    return {"ok": True}
 
 
 # ── Self-test ─────────────────────────────────────────────────────────────────
 
 @app.get("/debug/selftest")
-async def selftest() -> dict[str, Any]:
+async def selftest(request: Request) -> dict[str, Any]:
     checks: dict[str, Any] = {}
 
     token = os.environ.get("SUPERVISOR_TOKEN", "")
@@ -125,23 +249,34 @@ async def selftest() -> dict[str, Any]:
     all_ok: bool = bool(
         checks.get("supervisor_token_present") and checks.get("ha_api_reachable")
     )
+    log.info(
+        "[req:%s] selftest ok=%s token_present=%s ha_api_reachable=%s ha_status=%s",
+        _request_id(request),
+        all_ok,
+        checks.get("supervisor_token_present"),
+        checks.get("ha_api_reachable"),
+        checks.get("ha_api_status_code"),
+    )
     return {"ok": all_ok, "checks": checks}
 
 
 # ── Ingress UI ────────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
-async def ui_root() -> HTMLResponse:
+async def ui_root(request: Request) -> HTMLResponse:
+    log.info("[req:%s] serving ui root", _request_id(request))
     return HTMLResponse(content=_UI_HTML)
 
 
 # Catch any unknown sub-path so the Ingress panel doesn't 404 on reload.
 @app.get("/{full_path:path}", response_class=HTMLResponse, include_in_schema=False)
-async def ui_catchall(full_path: str) -> HTMLResponse:
+async def ui_catchall(full_path: str, request: Request) -> HTMLResponse:
     # Let actual API routes bubble up as 404; only serve UI for unknown paths.
     api_prefixes = ("v1/", "api/", "health", "debug/")
     if any(full_path.startswith(p) for p in api_prefixes):
+        log.info("[req:%s] catchall 404 for api-like path=%s", _request_id(request), full_path)
         raise HTTPException(status_code=404, detail="Not found")
+    log.info("[req:%s] catchall serving ui for path=%s", _request_id(request), full_path)
     return HTMLResponse(content=_UI_HTML)
 
 
@@ -231,6 +366,20 @@ _UI_HTML = """<!DOCTYPE html>
     .refresh-btn { border: none; background: none; color: var(--accent);
                    cursor: pointer; padding: 8px 14px; font-size: .75rem;
                    border-top: 1px solid var(--border); flex-shrink: 0; }
+    .diag { border: 1px solid var(--border); border-radius: 8px;
+            background: #0b1220; overflow: hidden; flex-shrink: 0; }
+    .diag-hdr { display: flex; align-items: center; justify-content: space-between;
+                padding: 7px 10px; border-bottom: 1px solid var(--border);
+                font-size: .72rem; color: var(--accent); text-transform: uppercase;
+                letter-spacing: .05em; }
+    .diag-btn { border: none; background: transparent; color: var(--accent);
+                cursor: pointer; font-size: .69rem; font-weight: 700; }
+    .diag-body { font-family: ui-monospace,SFMono-Regular,Menlo,monospace;
+                 font-size: .68rem; color: #93a3b8; max-height: 140px;
+                 overflow-y: auto; white-space: pre-wrap; line-height: 1.5;
+                 padding: 7px 10px; }
+    .diag.hidden .diag-body { display: none; }
+    .diag.hidden .diag-hdr { border-bottom: none; }
     @media (max-width: 700px) { .audit { display: none; } }
   </style>
 </head>
@@ -252,6 +401,13 @@ _UI_HTML = """<!DOCTYPE html>
           placeholder="Ask about your home or give instructions… (Enter to send, Shift+Enter for newline)"></textarea>
         <button class="send" id="sendBtn" onclick="send()">Send</button>
       </div>
+      <div class="diag" id="diag">
+        <div class="diag-hdr">
+          <span>Diagnostics</span>
+          <button class="diag-btn" id="diagToggle" type="button" onclick="toggleDiag()">Hide</button>
+        </div>
+        <div class="diag-body" id="diagBody">Initializing diagnostics…</div>
+      </div>
     </div>
     <div class="audit">
       <div class="panel-hdr">Audit Log</div>
@@ -266,20 +422,108 @@ _UI_HTML = """<!DOCTYPE html>
     const msgs = $('messages');
     const input = $('input');
     const sendBtn = $('sendBtn');
+    const diag = $('diag');
+    const diagBody = $('diagBody');
+    const diagToggle = $('diagToggle');
     let history = [];
+    let diagHidden = false;
+    let reqCounter = 0;
+    let lastAuditError = '';
+    const uiSessionId = Math.random().toString(36).slice(2, 10);
+
+    function clip(value, maxLen = 240) {
+      const text = String(value === undefined || value === null ? '' : value);
+      return text.length <= maxLen ? text : text.slice(0, maxLen) + '...[truncated]';
+    }
+    function safeStringify(value) {
+      try {
+        return JSON.stringify(value);
+      } catch (_e) {
+        return '[unserializable]';
+      }
+    }
+    function nextRequestId(scope) {
+      reqCounter += 1;
+      return 'ui-' + uiSessionId + '-' + scope + '-' + reqCounter;
+    }
 
     // ── URL helpers ──────────────────────────────────────────────────────────
     function detectApiBase() {
       const p = window.location.pathname || '/';
       const ingress = p.match(/^\/api\/hassio_ingress\/([^/]+)/);
-      if (ingress) return '/api/hassio_ingress/' + ingress[1] + '/';
+      if (ingress) {
+        return {base: '/api/hassio_ingress/' + ingress[1] + '/', reason: 'ingress_path'};
+      }
       const slugOnly = p.match(/^\/([^/]+)\/?$/);
-      if (slugOnly) return '/api/hassio_ingress/' + slugOnly[1] + '/';
-      if (p === '/') return '/';
-      return p.endsWith('/') ? p : p + '/';
+      if (slugOnly) {
+        return {base: '/api/hassio_ingress/' + slugOnly[1] + '/', reason: 'slug_path'};
+      }
+      if (p === '/') return {base: '/', reason: 'root'};
+      return {base: p.endsWith('/') ? p : p + '/', reason: 'fallback_path'};
     }
-    const apiBase = detectApiBase();
+    const apiDetect = detectApiBase();
+    const apiBase = apiDetect.base;
     const apiUrl = path => apiBase + String(path).replace(/^\/+/, '');
+
+    function appendDiagLine(line) {
+      if (!diagBody) return;
+      const hadDefault = diagBody.textContent === 'Initializing diagnostics…';
+      if (hadDefault) diagBody.textContent = '';
+      diagBody.textContent += (diagBody.textContent ? '\n' : '') + line;
+      const lines = diagBody.textContent.split('\n');
+      if (lines.length > 120) {
+        diagBody.textContent = lines.slice(lines.length - 120).join('\n');
+      }
+      diagBody.scrollTop = diagBody.scrollHeight;
+    }
+    function toggleDiag() {
+      if (!diag || !diagToggle) return;
+      diagHidden = !diagHidden;
+      diag.classList.toggle('hidden', diagHidden);
+      diagToggle.textContent = diagHidden ? 'Show' : 'Hide';
+    }
+    function emitDiag(level, event, message, context) {
+      const ts = new Date().toISOString();
+      const line = '[' + ts + '] [' + String(level || 'info').toUpperCase() + '] ' +
+        clip(event, 64) + ' - ' + clip(message || '', 260) +
+        (context && Object.keys(context).length ? ' | ' + clip(safeStringify(context), 280) : '');
+      appendDiagLine(line);
+      if (level === 'error') {
+        console.error('[HA-AI-UI]', event, message || '', context || {});
+      } else if (level === 'warn' || level === 'warning') {
+        console.warn('[HA-AI-UI]', event, message || '', context || {});
+      } else {
+        console.log('[HA-AI-UI]', event, message || '', context || {});
+      }
+    }
+    async function sendFrontendLog(level, event, message, context = {}) {
+      const payload = {
+        level: level || 'info',
+        event: event || 'ui.event',
+        message: message || '',
+        context,
+        ts: new Date().toISOString(),
+        url: window.location.href,
+        session_id: uiSessionId
+      };
+      try {
+        await fetch(apiUrl('api/frontend-log'), {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Request-ID': nextRequestId('frontend-log')
+          },
+          body: JSON.stringify(payload),
+          keepalive: true
+        });
+      } catch (_e) {
+        // Never recurse logging if the log endpoint itself fails.
+      }
+    }
+    function logEvent(level, event, message, context = {}) {
+      emitDiag(level, event, message, context);
+      sendFrontendLog(level, event, message, context);
+    }
 
     function esc(t) {
       return String(t)
@@ -299,6 +543,38 @@ _UI_HTML = """<!DOCTYPE html>
       msgs.scrollTop = msgs.scrollHeight;
     }
 
+    async function fetchWithTrace(label, path, options = {}, timeoutMs = 10000) {
+      const reqId = nextRequestId(String(label || 'req').replace(/[^a-z0-9]/gi, '').slice(0, 14) || 'req');
+      const url = apiUrl(path);
+      const started = performance.now();
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      const headers = Object.assign({}, options.headers || {}, {'X-Request-ID': reqId});
+      logEvent('info', label + '.start', 'Fetching ' + url, {reqId, timeoutMs, apiBase});
+      try {
+        const response = await fetch(url, Object.assign({}, options, {headers, signal: controller.signal}));
+        const durationMs = Math.round((performance.now() - started) * 10) / 10;
+        logEvent('info', label + '.response', 'HTTP ' + response.status, {
+          reqId,
+          durationMs,
+          ok: response.ok
+        });
+        return {response, reqId, url, durationMs};
+      } catch (e) {
+        const durationMs = Math.round((performance.now() - started) * 10) / 10;
+        const timeout = e && e.name === 'AbortError';
+        logEvent('error', label + '.network_error', timeout ? 'Request timed out' : (e.message || String(e)), {
+          reqId,
+          durationMs,
+          timeout,
+          url
+        });
+        throw e;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
+
     async function send() {
       const text = input.value.trim();
       if (!text) return;
@@ -308,19 +584,27 @@ _UI_HTML = """<!DOCTYPE html>
       addMsg('user', text);
       history.push({role:'user', content:text});
       try {
-        const r = await fetch(apiUrl('v1/chat/completions'), {
+        const req = await fetchWithTrace('chat.completions', 'v1/chat/completions', {
           method: 'POST',
           headers: {'Content-Type':'application/json'},
           body: JSON.stringify({model:'ha-agent', messages:history, temperature:0.7})
-        });
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        const d = await r.json();
+        }, 60000);
+        if (!req.response.ok) {
+          throw new Error('HTTP ' + req.response.status + ' @ ' + req.url + ' req=' + req.reqId);
+        }
+        const d = await req.response.json();
         const reply = d.choices[0].message.content;
         addMsg('assistant', reply);
         history.push({role:'assistant', content:reply});
+        logEvent('info', 'chat.success', 'Assistant response received', {
+          reqId: req.reqId,
+          replyChars: String(reply || '').length
+        });
         setTimeout(loadAudit, 600);
       } catch(e) {
-        addMsg('system', 'Error: ' + e.message);
+        const msg = e && e.message ? e.message : String(e);
+        logEvent('error', 'chat.failure', msg, {historyLen: history.length});
+        addMsg('system', 'Error: ' + msg);
       } finally {
         sendBtn.disabled = false;
         $('typing').style.display = 'none';
@@ -331,10 +615,11 @@ _UI_HTML = """<!DOCTYPE html>
     async function loadStatus() {
       const statusMsg = msgs.querySelector('.msg.system');
       try {
-        const healthUrl = apiUrl('health');
-        const r = await fetch(healthUrl);
-        if (!r.ok) throw new Error('HTTP ' + r.status + ' @ ' + healthUrl);
-        const d = await r.json();
+        const req = await fetchWithTrace('health', 'health', {}, 10000);
+        if (!req.response.ok) {
+          throw new Error('HTTP ' + req.response.status + ' @ ' + req.url + ' req=' + req.reqId);
+        }
+        const d = await req.response.json();
         $('badges').innerHTML =
           '<span class="badge badge-' + esc(d.mode) + '">' + esc(d.mode).toUpperCase() + '</span>' +
           '<span class="badge badge-prov">' + esc(d.llm_provider) + '</span>' +
@@ -343,17 +628,37 @@ _UI_HTML = """<!DOCTYPE html>
           'Mode: ' + d.mode + ' | Provider: ' + d.llm_provider +
           ' | Confirmation: ' + d.confirmation_required +
           ' | Max actions: ' + d.max_actions_per_turn;
+        logEvent('info', 'health.loaded', 'Configuration loaded', {
+          reqId: req.reqId,
+          mode: d.mode,
+          provider: d.llm_provider,
+          app_log_level: d.app_log_level || 'n/a'
+        });
       } catch(e) {
+        const msg = e && e.message ? e.message : String(e);
         // Show the error so it's visible instead of silently stuck on "Loading…"
-        if (statusMsg) statusMsg.textContent = 'Could not reach add-on backend: ' + e.message +
+        if (statusMsg) statusMsg.textContent = 'Could not reach add-on backend: ' + msg +
           ' — check the add-on log.';
         $('badges').innerHTML = '<span class="badge" style="background:#7f1d1d;color:#fca5a5">OFFLINE</span>';
+        logEvent('error', 'health.failure', msg, {
+          pathname: window.location.pathname,
+          href: window.location.href,
+          apiBase,
+          detectReason: apiDetect.reason
+        });
       }
     }
 
     async function loadAudit() {
+      const reqId = nextRequestId('audit');
+      const url = apiUrl('api/audit?limit=50');
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
       try {
-        const r = await fetch(apiUrl('api/audit?limit=50'));
+        const r = await fetch(url, {
+          headers: {'X-Request-ID': reqId},
+          signal: controller.signal
+        });
         if (!r.ok) return;
         const d = await r.json();
         if (!d.entries || !d.entries.length) return;
@@ -369,13 +674,40 @@ _UI_HTML = """<!DOCTYPE html>
             '<div class="ae-line" style="color:#4b5563">' + esc(e.result_summary||'') + '</div>' +
             '</div>';
         }).join('');
-      } catch(e) { /* network error – silently skip audit refresh */ }
+        lastAuditError = '';
+      } catch(e) {
+        const msg = e && e.message ? e.message : String(e);
+        if (msg !== lastAuditError) {
+          lastAuditError = msg;
+          logEvent('warn', 'audit.failure', msg, {reqId, url});
+        }
+      } finally {
+        clearTimeout(timeoutId);
+      }
     }
 
     input.addEventListener('keydown', e => {
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
     });
+    window.addEventListener('error', e => {
+      logEvent('error', 'window.error', e.message || 'Unhandled JS error', {
+        source: e.filename,
+        line: e.lineno,
+        column: e.colno
+      });
+    });
+    window.addEventListener('unhandledrejection', e => {
+      const reason = e.reason && e.reason.message ? e.reason.message : String(e.reason);
+      logEvent('error', 'window.unhandledrejection', reason, {});
+    });
 
+    logEvent('info', 'bootstrap.start', 'UI boot', {
+      href: window.location.href,
+      pathname: window.location.pathname,
+      apiBase,
+      detectReason: apiDetect.reason,
+      session: uiSessionId
+    });
     loadStatus();
     loadAudit();
     setInterval(loadAudit, 30000);

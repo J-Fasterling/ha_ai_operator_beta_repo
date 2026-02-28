@@ -63,6 +63,7 @@ llm_oauth_token: null
 confirmation_required: true
 max_actions_per_turn: 5
 audit_log_level: "minimal"
+app_log_level: "info"
 ```
 
 ## Security

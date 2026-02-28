@@ -63,3 +63,10 @@ configuration:
     description: >-
       minimal: log tool name, params summary, result summary, and risk level.
       verbose: reserved for future extended logging (currently identical to minimal).
+  app_log_level:
+    name: App Log Level
+    description: >-
+      Logging verbosity of the add-on backend.
+      debug: most detailed diagnostics (recommended while investigating loading issues).
+      info: default operational logs.
+      warning/error: reduced output, only problems.

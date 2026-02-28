@@ -1,5 +1,5 @@
 name: "HA AI Operator - Beta"
-version: "0.1.1-beta.4"
+version: "0.1.1-beta.5"
 slug: "ha_ai_operator"
 description: "On-device AI agent to operate Home Assistant safely"
 url: "https://github.com/J-Fasterling/ha_ai_operator-beta"
@@ -43,6 +43,7 @@ options:
   confirmation_required: true
   max_actions_per_turn: 5
   audit_log_level: "minimal"
+  app_log_level: "info"
 
 schema:
   timezone: str
@@ -56,3 +57,4 @@ schema:
   confirmation_required: bool
   max_actions_per_turn: int
   audit_log_level: list(minimal|verbose)
+  app_log_level: list(debug|info|warning|error)

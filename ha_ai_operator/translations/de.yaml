@@ -63,3 +63,10 @@ configuration:
     description: >-
       minimal: protokolliert Tool-Name, Parameter-Zusammenfassung, Ergebnis und Risikostufe.
       verbose: reserviert für zukünftige erweiterte Protokollierung (derzeit identisch mit minimal).
+  app_log_level:
+    name: App-Log-Stufe
+    description: >-
+      Protokollierungsdetail des Add-on-Backends.
+      debug: maximale Diagnostik (empfohlen waehrend der Analyse von Ladeproblemen).
+      info: Standard-Betriebslogs.
+      warning/error: reduzierte Ausgabe, nur Warnungen/Fehler.
