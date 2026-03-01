@@ -297,7 +297,6 @@ class OpenAICompatibleClient(BaseLLMClient):
         payload: dict[str, Any] = {
             "model": model,
             "input": input_items,
-            "temperature": temperature,
             "store": False,
             "stream": True,
         }
