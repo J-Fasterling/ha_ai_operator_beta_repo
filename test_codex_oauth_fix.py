@@ -158,7 +158,8 @@ async def test_codex_oauth_sends_responses_format():
     assert "instructions" in body, "Should have 'instructions'"
     assert "messages" not in body, "Should NOT have 'messages'"
     assert body["instructions"] == "You are a helper."
-    print("  PASS: codex_oauth sends Responses API format")
+    assert body.get("store") is False, "Must set store=false for ChatGPT backend"
+    print("  PASS: codex_oauth sends Responses API format with store=false")
 
 
 async def test_api_key_sends_chat_completions_format():

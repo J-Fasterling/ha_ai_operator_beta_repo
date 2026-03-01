@@ -298,6 +298,7 @@ class OpenAICompatibleClient(BaseLLMClient):
             "model": model,
             "input": input_items,
             "temperature": temperature,
+            "store": False,
         }
         if instructions:
             payload["instructions"] = instructions
