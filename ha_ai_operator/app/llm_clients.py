@@ -353,30 +353,46 @@ def _resolve_from_store(provider: str) -> tuple[str, str]:
 # ── Factory ───────────────────────────────────────────────────────────────────
 
 def make_llm_client() -> BaseLLMClient:
-    """Instantiate the correct LLM client from environment variables.
+    """Instantiate the correct LLM client.
 
-    If LLM_API_KEY and LLM_OAUTH_TOKEN are both empty, falls back to reading
-    credentials from the auth store (sync read only, no token refresh).
+    Credential resolution order:
+      1. Auth Store (managed via the Auth tab in the UI)
+         - OAuth credential found  → codex_oauth mode
+         - API key credential found → api_key mode
+      2. LLM_API_KEY env var (classic config fallback)
+
+    LLM_OAUTH_TOKEN and OPENAI_AUTH_MODE are no longer read from the
+    environment; use the Auth tab to manage OAuth tokens.
     """
     provider = os.environ.get("LLM_PROVIDER", "openai_compatible")
     base_url = os.environ.get("LLM_BASE_URL", "")
-    api_key = os.environ.get("LLM_API_KEY", "")
-    auth_mode = os.environ.get("OPENAI_AUTH_MODE", "api_key")
-    oauth_token = os.environ.get("LLM_OAUTH_TOKEN", "")
-
-    # Fall back to store if env vars are empty
-    if not api_key and not oauth_token:
-        store_provider = "anthropic" if provider == "anthropic" else "openai-codex"
-        api_key, oauth_token = _resolve_from_store(store_provider)
+    env_api_key = os.environ.get("LLM_API_KEY", "")
 
     if provider == "anthropic":
+        # Try store first, fall back to env var.
+        api_key, _ = _resolve_from_store("anthropic")
+        if not api_key:
+            api_key = env_api_key
         return AnthropicClient(api_key=api_key)
 
     # openai_compatible | ollama | custom_http
+    # Check store for an OAuth token (codex flow) first.
+    store_key, store_oauth = _resolve_from_store("openai-codex")
+    if store_oauth:
+        return OpenAICompatibleClient(
+            provider=provider,
+            base_url=base_url,
+            api_key=store_key or env_api_key,
+            auth_mode="codex_oauth",
+            oauth_token=store_oauth,
+        )
+
+    # No OAuth in store — use API key (store or env var).
+    api_key = store_key or env_api_key
     return OpenAICompatibleClient(
         provider=provider,
         base_url=base_url,
         api_key=api_key,
-        auth_mode=auth_mode,
-        oauth_token=oauth_token,
+        auth_mode="api_key",
+        oauth_token="",
     )
