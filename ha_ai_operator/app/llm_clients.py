@@ -26,11 +26,12 @@ OAuth / Codex note
 ──────────────────
 OpenAI-compatible providers default to static API keys.
 For OpenAI, this add-on can also send a bearer OAuth token (Codex OAuth mode).
-Codex OAuth tokens lack the ``model.request`` scope required by
-``/v1/chat/completions``; they are only valid for the Responses API
-(``/v1/responses``).  When ``auth_mode == "codex_oauth"`` the client
-automatically switches to the Responses API and converts between the two
-wire formats transparently.
+Codex OAuth tokens are ChatGPT consumer tokens — they lack the API scopes
+required by ``api.openai.com`` endpoints.  The official Codex CLI sends them
+to ``https://chatgpt.com/backend-api/codex/responses`` with a
+``ChatGPT-Account-ID`` header.  When ``auth_mode == "codex_oauth"`` this
+client reproduces that behaviour and converts between the Responses API
+wire format and the OpenAI Chat Completions format transparently.
 """
 from __future__ import annotations
 
@@ -61,6 +62,9 @@ class BaseLLMClient(ABC):
 
 # ── OpenAI-compatible (covers OpenAI, Groq, Ollama, custom HTTP) ──────────────
 
+_CODEX_CHATGPT_BASE = "https://chatgpt.com/backend-api/codex"
+
+
 class OpenAICompatibleClient(BaseLLMClient):
     def __init__(
         self,
@@ -69,11 +73,13 @@ class OpenAICompatibleClient(BaseLLMClient):
         api_key: str,
         auth_mode: str = "api_key",
         oauth_token: str = "",
+        account_id: str = "",
     ) -> None:
         self._provider = provider
         self._api_key = api_key
         self._auth_mode = auth_mode
         self._oauth_token = oauth_token
+        self._account_id = account_id
         # Resolve base URL
         if base_url:
             self._base = base_url.rstrip("/")
@@ -91,6 +97,8 @@ class OpenAICompatibleClient(BaseLLMClient):
             auth_value = self._api_key or self._oauth_token
         if auth_value:
             h["Authorization"] = f"Bearer {auth_value}"
+        if self._auth_mode == "codex_oauth" and self._account_id:
+            h["ChatGPT-Account-ID"] = self._account_id
         return h
 
     # ── Responses API converters (Codex OAuth) ──────────────────────────────
@@ -232,7 +240,7 @@ class OpenAICompatibleClient(BaseLLMClient):
         temperature: float,
         tools: Optional[list[dict[str, Any]]] = None,
     ) -> dict[str, Any]:
-        log.info(
+        log.debug(
             "OpenAICompatibleClient.chat: auth_mode=%s base=%s model=%s",
             self._auth_mode, self._base, model,
         )
@@ -249,7 +257,7 @@ class OpenAICompatibleClient(BaseLLMClient):
     ) -> dict[str, Any]:
         """Standard Chat Completions API call."""
         url = f"{self._base}/chat/completions"
-        log.info("_chat_completions: POST %s", url)
+        log.debug("_chat_completions: POST %s", url)
         payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
@@ -260,7 +268,7 @@ class OpenAICompatibleClient(BaseLLMClient):
             payload["tool_choice"] = "auto"
         async with httpx.AsyncClient(timeout=60.0) as client:
             r = await client.post(url, json=payload, headers=self._headers())
-            log.info("_chat_completions: status=%s", r.status_code)
+            log.debug("_chat_completions: status=%s", r.status_code)
             r.raise_for_status()
             return r.json()
 
@@ -271,9 +279,19 @@ class OpenAICompatibleClient(BaseLLMClient):
         temperature: float,
         tools: Optional[list[dict[str, Any]]] = None,
     ) -> dict[str, Any]:
-        """Responses API call (used for Codex OAuth tokens)."""
-        url = f"{self._base}/responses"
-        log.info("_chat_responses: POST %s", url)
+        """Responses API call (used for Codex OAuth tokens).
+
+        ChatGPT OAuth tokens must go to chatgpt.com/backend-api/codex,
+        NOT to api.openai.com.  If the user set a custom LLM_BASE_URL
+        we respect that; otherwise we override to the ChatGPT backend.
+        """
+        # Use ChatGPT backend unless user explicitly set a base URL
+        if self._base == "https://api.openai.com/v1":
+            base = _CODEX_CHATGPT_BASE
+        else:
+            base = self._base
+        url = f"{base}/responses"
+        log.info("_chat_responses: POST %s (codex_oauth)", url)
         instructions, input_items = self._messages_to_responses(messages)
 
         payload: dict[str, Any] = {
@@ -289,7 +307,7 @@ class OpenAICompatibleClient(BaseLLMClient):
 
         async with httpx.AsyncClient(timeout=120.0) as client:
             r = await client.post(url, json=payload, headers=self._headers())
-            log.info("_chat_responses: status=%s", r.status_code)
+            log.debug("_chat_responses: status=%s", r.status_code)
             if r.status_code >= 400:
                 log.warning(
                     "_chat_responses: error body=%s", r.text[:500]
@@ -497,10 +515,11 @@ class AnthropicClient(BaseLLMClient):
 
 # ── Store fallback (sync, no refresh) ─────────────────────────────────────────
 
-def _resolve_from_store(provider: str) -> tuple[str, str]:
+def _resolve_from_store(provider: str) -> tuple[str, str, str]:
     """Read credentials directly from the auth store (sync, no token refresh).
 
-    Returns (api_key, oauth_token). Falls back to empty strings on any error.
+    Returns (api_key, oauth_token, account_id).
+    Falls back to empty strings on any error.
     Cannot call asyncio.run() — already running inside Uvicorn's event loop.
     """
     try:
@@ -518,51 +537,40 @@ def _resolve_from_store(provider: str) -> tuple[str, str]:
             if pid in data.profiles and pid not in candidates:
                 candidates.append(pid)
 
-        log.info(
-            "_resolve_from_store: provider=%s candidates=%s lastGood=%s "
-            "order_keys=%s profile_ids=%s",
+        log.debug(
+            "_resolve_from_store: provider=%s candidates=%s lastGood=%s",
             provider, candidates, last_good,
-            list(data.order.keys()), list(data.profiles.keys()),
         )
 
         for pid in candidates:
             raw = data.profiles[pid]
             ctype = raw.get("type")
-            log.info(
-                "_resolve_from_store: checking pid=%s type=%s",
-                pid, ctype,
-            )
+            log.debug("_resolve_from_store: checking pid=%s type=%s", pid, ctype)
             if ctype == "api_key":
-                log.info("_resolve_from_store: → api_key found")
-                return raw.get("key", ""), ""
+                log.debug("_resolve_from_store: → api_key found")
+                return raw.get("key", ""), "", ""
             elif ctype == "token":
                 expires = raw.get("expires")
                 if expires and expires < now_ms:
-                    log.info("_resolve_from_store: token %s expired", pid)
+                    log.debug("_resolve_from_store: token %s expired", pid)
                     continue
-                log.info("_resolve_from_store: → token found")
-                return "", raw.get("token", "")
+                log.debug("_resolve_from_store: → token found")
+                return "", raw.get("token", ""), ""
             elif ctype == "oauth":
                 expires = raw.get("expires", 0)
                 if expires < now_ms:
-                    log.info(
-                        "_resolve_from_store: oauth %s expired "
-                        "(expires=%s now=%s)",
-                        pid, expires, now_ms,
-                    )
+                    log.debug("_resolve_from_store: oauth %s expired", pid)
                     continue  # Expired; skip (no refresh in sync path)
-                log.info("_resolve_from_store: → oauth access token found")
-                return "", raw.get("access", "")
+                account_id = raw.get("accountId", "")
+                log.debug("_resolve_from_store: → oauth token found")
+                return "", raw.get("access", ""), account_id
             else:
-                log.info(
-                    "_resolve_from_store: unknown type %s for pid=%s",
-                    ctype, pid,
-                )
+                log.debug("_resolve_from_store: unknown type %s for pid=%s", ctype, pid)
 
-        log.info("_resolve_from_store: no usable credential found for %s", provider)
+        log.debug("_resolve_from_store: no usable credential for %s", provider)
     except Exception as exc:
         log.warning("_resolve_from_store: exception: %s", exc)
-    return "", ""
+    return "", "", ""
 
 
 # ── Factory ───────────────────────────────────────────────────────────────────
@@ -583,47 +591,40 @@ def make_llm_client() -> BaseLLMClient:
     base_url = os.environ.get("LLM_BASE_URL", "")
     env_api_key = os.environ.get("LLM_API_KEY", "")
 
-    log.info(
+    log.debug(
         "make_llm_client: provider=%s base_url_set=%s env_api_key_set=%s",
         provider, bool(base_url), bool(env_api_key),
     )
 
     if provider == "anthropic":
         # Try store first, fall back to env var.
-        api_key, _ = _resolve_from_store("anthropic")
+        api_key, _, _ = _resolve_from_store("anthropic")
         if not api_key:
             api_key = env_api_key
-        log.info("make_llm_client: → AnthropicClient key_set=%s", bool(api_key))
+        log.info("make_llm_client: → AnthropicClient")
         return AnthropicClient(api_key=api_key)
 
     # openai_compatible | ollama | custom_http
     # Check store for an OAuth token (codex flow) first.
-    store_key, store_oauth = _resolve_from_store("openai-codex")
-    log.info(
-        "make_llm_client: store lookup provider=openai-codex → "
-        "store_key_set=%s store_oauth_set=%s",
-        bool(store_key), bool(store_oauth),
+    store_key, store_oauth, account_id = _resolve_from_store("openai-codex")
+    log.debug(
+        "make_llm_client: store lookup → key_set=%s oauth_set=%s account_id_set=%s",
+        bool(store_key), bool(store_oauth), bool(account_id),
     )
     if store_oauth:
-        log.info(
-            "make_llm_client: → OpenAICompatibleClient auth_mode=codex_oauth "
-            "(will use /v1/responses)"
-        )
+        log.info("make_llm_client: → OpenAICompatibleClient (codex_oauth → chatgpt.com)")
         return OpenAICompatibleClient(
             provider=provider,
             base_url=base_url,
             api_key=store_key or env_api_key,
             auth_mode="codex_oauth",
             oauth_token=store_oauth,
+            account_id=account_id,
         )
 
     # No OAuth in store — use API key (store or env var).
     api_key = store_key or env_api_key
-    log.info(
-        "make_llm_client: → OpenAICompatibleClient auth_mode=api_key "
-        "key_set=%s (will use /v1/chat/completions)",
-        bool(api_key),
-    )
+    log.info("make_llm_client: → OpenAICompatibleClient (api_key → /chat/completions)")
     return OpenAICompatibleClient(
         provider=provider,
         base_url=base_url,
