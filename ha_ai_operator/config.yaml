@@ -1,5 +1,5 @@
 name: "HA AI Operator - Beta"
-version: "0.1.1-beta.12"
+version: "0.1.1-beta.13"
 slug: "ha_ai_operator"
 description: "On-device AI agent to operate Home Assistant safely"
 url: "https://github.com/J-Fasterling/ha_ai_operator-beta"
@@ -35,8 +35,6 @@ options:
   timezone: "Europe/Berlin"
   mode: "read_only"
   llm_provider: "openai_compatible"  # openai_compatible | ollama | custom_http | anthropic
-  llm_model: null
-  llm_base_url: null       # Only needed for Ollama or custom LLM endpoints
   allow_supervisor_api: false
   confirmation_required: true
   max_actions_per_turn: 5
