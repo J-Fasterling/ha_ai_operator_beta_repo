@@ -22,20 +22,28 @@ Supported backends
   anthropic          Anthropic Messages API (claude-* models)
                      Uses x-api-key header and /v1/messages endpoint.
 
-OAuth note
-──────────
+OAuth / Codex note
+──────────────────
 OpenAI-compatible providers default to static API keys.
 For OpenAI, this add-on can also send a bearer OAuth token (Codex OAuth mode).
+Codex OAuth tokens lack the ``model.request`` scope required by
+``/v1/chat/completions``; they are only valid for the Responses API
+(``/v1/responses``).  When ``auth_mode == "codex_oauth"`` the client
+automatically switches to the Responses API and converts between the two
+wire formats transparently.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 from abc import ABC, abstractmethod
 from typing import Any, Optional
 
 import httpx
+
+log = logging.getLogger("ha_ai_operator.llm_clients")
 
 # ── Base ──────────────────────────────────────────────────────────────────────
 
@@ -85,6 +93,138 @@ class OpenAICompatibleClient(BaseLLMClient):
             h["Authorization"] = f"Bearer {auth_value}"
         return h
 
+    # ── Responses API converters (Codex OAuth) ──────────────────────────────
+
+    @staticmethod
+    def _tools_to_responses(tools: list[dict]) -> list[dict]:
+        """Convert OpenAI Chat Completions tool defs → Responses API format.
+
+        Chat Completions:
+            {"type": "function", "function": {"name": …, "parameters": …}}
+        Responses API:
+            {"type": "function", "name": …, "parameters": …}
+        """
+        result = []
+        for t in tools:
+            fn = t.get("function", {})
+            result.append({
+                "type": "function",
+                "name": fn.get("name", ""),
+                "description": fn.get("description", ""),
+                "parameters": fn.get("parameters", {"type": "object", "properties": {}}),
+            })
+        return result
+
+    @staticmethod
+    def _messages_to_responses(
+        messages: list[dict],
+    ) -> tuple[str, list[dict]]:
+        """Convert OpenAI Chat Completions messages → Responses API input items.
+
+        Returns (instructions, input_items).
+        - system messages → concatenated into instructions string
+        - user messages → {"role": "user", "content": "…"}
+        - assistant messages (text only) → {"role": "assistant", "content": "…"}
+        - assistant messages with tool_calls → function_call items
+        - tool result messages → function_call_output items
+        """
+        instructions_parts: list[str] = []
+        items: list[dict] = []
+
+        for msg in messages:
+            role = msg.get("role", "")
+
+            if role == "system":
+                if msg.get("content"):
+                    instructions_parts.append(msg["content"])
+                continue
+
+            if role == "user":
+                items.append({"role": "user", "content": msg.get("content", "")})
+                continue
+
+            if role == "assistant":
+                tool_calls: list[dict] = msg.get("tool_calls") or []
+                text: str = msg.get("content") or ""
+                if tool_calls:
+                    # Emit text as a message item first, then each tool call
+                    if text:
+                        items.append({"role": "assistant", "content": text})
+                    for tc in tool_calls:
+                        fn = tc.get("function", {})
+                        items.append({
+                            "type": "function_call",
+                            "call_id": tc.get("id", ""),
+                            "name": fn.get("name", ""),
+                            "arguments": fn.get("arguments", "{}"),
+                        })
+                else:
+                    items.append({"role": "assistant", "content": text or ""})
+                continue
+
+            if role == "tool":
+                items.append({
+                    "type": "function_call_output",
+                    "call_id": msg.get("tool_call_id", ""),
+                    "output": msg.get("content", ""),
+                })
+                continue
+
+        return "\n\n".join(instructions_parts), items
+
+    @staticmethod
+    def _responses_to_openai(raw: dict) -> dict:
+        """Convert a Responses API response → OpenAI Chat Completions format.
+
+        Responses API output items:
+        - {"type": "message", "content": [{"type": "output_text", "text": …}]}
+        - {"type": "function_call", "call_id": …, "name": …, "arguments": …}
+
+        Mapped to:
+        - choices[0].message.content
+        - choices[0].message.tool_calls[]
+        """
+        output_items: list[dict] = raw.get("output", [])
+        status: str = raw.get("status", "completed")
+
+        text_parts: list[str] = []
+        tool_calls: list[dict] = []
+
+        for item in output_items:
+            item_type = item.get("type", "")
+
+            if item_type == "message":
+                for block in item.get("content", []):
+                    if block.get("type") == "output_text":
+                        text_parts.append(block.get("text", ""))
+
+            elif item_type == "function_call":
+                tool_calls.append({
+                    "id": item.get("call_id", ""),
+                    "type": "function",
+                    "function": {
+                        "name": item.get("name", ""),
+                        "arguments": item.get("arguments", "{}"),
+                    },
+                })
+
+        finish_reason = "tool_calls" if tool_calls else "stop"
+        message: dict[str, Any] = {
+            "role": "assistant",
+            "content": "\n".join(text_parts) or None,
+        }
+        if tool_calls:
+            message["tool_calls"] = tool_calls
+
+        return {
+            "choices": [
+                {"index": 0, "message": message, "finish_reason": finish_reason}
+            ],
+            "model": raw.get("model", ""),
+        }
+
+    # ── Main call ────────────────────────────────────────────────────────────
+
     async def chat(
         self,
         messages: list[dict[str, Any]],
@@ -92,6 +232,18 @@ class OpenAICompatibleClient(BaseLLMClient):
         temperature: float,
         tools: Optional[list[dict[str, Any]]] = None,
     ) -> dict[str, Any]:
+        if self._auth_mode == "codex_oauth":
+            return await self._chat_responses(messages, model, temperature, tools)
+        return await self._chat_completions(messages, model, temperature, tools)
+
+    async def _chat_completions(
+        self,
+        messages: list[dict[str, Any]],
+        model: str,
+        temperature: float,
+        tools: Optional[list[dict[str, Any]]] = None,
+    ) -> dict[str, Any]:
+        """Standard Chat Completions API call."""
         payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
@@ -108,6 +260,37 @@ class OpenAICompatibleClient(BaseLLMClient):
             )
             r.raise_for_status()
             return r.json()
+
+    async def _chat_responses(
+        self,
+        messages: list[dict[str, Any]],
+        model: str,
+        temperature: float,
+        tools: Optional[list[dict[str, Any]]] = None,
+    ) -> dict[str, Any]:
+        """Responses API call (used for Codex OAuth tokens)."""
+        instructions, input_items = self._messages_to_responses(messages)
+
+        payload: dict[str, Any] = {
+            "model": model,
+            "input": input_items,
+            "temperature": temperature,
+        }
+        if instructions:
+            payload["instructions"] = instructions
+        if tools:
+            payload["tools"] = self._tools_to_responses(tools)
+            payload["tool_choice"] = "auto"
+
+        log.debug("responses API payload keys: %s", list(payload.keys()))
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            r = await client.post(
+                f"{self._base}/responses",
+                json=payload,
+                headers=self._headers(),
+            )
+            r.raise_for_status()
+            return self._responses_to_openai(r.json())
 
 
 # ── Anthropic ─────────────────────────────────────────────────────────────────
