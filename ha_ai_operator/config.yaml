@@ -1,5 +1,5 @@
 name: "HA AI Operator - Beta"
-version: "0.1.1-beta.11"
+version: "0.1.1-beta.12"
 slug: "ha_ai_operator"
 description: "On-device AI agent to operate Home Assistant safely"
 url: "https://github.com/J-Fasterling/ha_ai_operator-beta"
@@ -36,9 +36,7 @@ options:
   mode: "read_only"
   llm_provider: "openai_compatible"  # openai_compatible | ollama | custom_http | anthropic
   llm_model: null
-  llm_api_key: null        # Optional: API key for direct config (classic mode)
-                           # Leave empty and use the Auth tab for OAuth/token management
-  llm_base_url: null       # Optional: only needed for Ollama or custom LLM endpoints
+  llm_base_url: null       # Only needed for Ollama or custom LLM endpoints
   allow_supervisor_api: false
   confirmation_required: true
   max_actions_per_turn: 5
@@ -50,8 +48,12 @@ schema:
   mode: list(read_only|control_assist|ops_write)
   llm_provider: list(openai_compatible|ollama|custom_http|anthropic)
   llm_model: str?
-  llm_api_key: password?
   llm_base_url: str?
+  # Optional direct credential fields — prefer the Auth tab in the UI instead.
+  # Kept in schema so existing configs with these fields continue to validate.
+  llm_api_key: password?
+  llm_oauth_token: password?
+  openai_auth_mode: str?
   allow_supervisor_api: bool
   confirmation_required: bool
   max_actions_per_turn: int

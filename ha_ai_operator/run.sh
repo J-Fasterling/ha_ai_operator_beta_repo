@@ -21,7 +21,7 @@ else
     export LLM_MODEL=""
 fi
 
-# ── Handle nullable / optional secrets ───────────────────────────────────────
+# ── Handle nullable / optional fields ────────────────────────────────────────
 # Never log the values of secret fields.
 if bashio::config.has_value 'llm_base_url'; then
     export LLM_BASE_URL
@@ -30,12 +30,22 @@ else
     export LLM_BASE_URL=""
 fi
 
+# Direct credential fields (kept for backwards compatibility).
+# Prefer the Auth tab in the UI — credentials stored there take priority.
 if bashio::config.has_value 'llm_api_key'; then
     export LLM_API_KEY
     LLM_API_KEY="$(bashio::config 'llm_api_key')"
     # Never log LLM_API_KEY — not even a hash or length.
 else
     export LLM_API_KEY=""
+fi
+
+if bashio::config.has_value 'llm_oauth_token'; then
+    export LLM_OAUTH_TOKEN
+    LLM_OAUTH_TOKEN="$(bashio::config 'llm_oauth_token')"
+    # Never log LLM_OAUTH_TOKEN — not even a hash or length.
+else
+    export LLM_OAUTH_TOKEN=""
 fi
 
 # ── Safe startup log (no secrets) ─────────────────────────────────────────────
