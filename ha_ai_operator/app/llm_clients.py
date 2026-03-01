@@ -232,6 +232,10 @@ class OpenAICompatibleClient(BaseLLMClient):
         temperature: float,
         tools: Optional[list[dict[str, Any]]] = None,
     ) -> dict[str, Any]:
+        log.info(
+            "OpenAICompatibleClient.chat: auth_mode=%s base=%s model=%s",
+            self._auth_mode, self._base, model,
+        )
         if self._auth_mode == "codex_oauth":
             return await self._chat_responses(messages, model, temperature, tools)
         return await self._chat_completions(messages, model, temperature, tools)
@@ -244,6 +248,8 @@ class OpenAICompatibleClient(BaseLLMClient):
         tools: Optional[list[dict[str, Any]]] = None,
     ) -> dict[str, Any]:
         """Standard Chat Completions API call."""
+        url = f"{self._base}/chat/completions"
+        log.info("_chat_completions: POST %s", url)
         payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
@@ -253,11 +259,8 @@ class OpenAICompatibleClient(BaseLLMClient):
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
         async with httpx.AsyncClient(timeout=60.0) as client:
-            r = await client.post(
-                f"{self._base}/chat/completions",
-                json=payload,
-                headers=self._headers(),
-            )
+            r = await client.post(url, json=payload, headers=self._headers())
+            log.info("_chat_completions: status=%s", r.status_code)
             r.raise_for_status()
             return r.json()
 
@@ -269,6 +272,8 @@ class OpenAICompatibleClient(BaseLLMClient):
         tools: Optional[list[dict[str, Any]]] = None,
     ) -> dict[str, Any]:
         """Responses API call (used for Codex OAuth tokens)."""
+        url = f"{self._base}/responses"
+        log.info("_chat_responses: POST %s", url)
         instructions, input_items = self._messages_to_responses(messages)
 
         payload: dict[str, Any] = {
@@ -282,13 +287,13 @@ class OpenAICompatibleClient(BaseLLMClient):
             payload["tools"] = self._tools_to_responses(tools)
             payload["tool_choice"] = "auto"
 
-        log.debug("responses API payload keys: %s", list(payload.keys()))
         async with httpx.AsyncClient(timeout=120.0) as client:
-            r = await client.post(
-                f"{self._base}/responses",
-                json=payload,
-                headers=self._headers(),
-            )
+            r = await client.post(url, json=payload, headers=self._headers())
+            log.info("_chat_responses: status=%s", r.status_code)
+            if r.status_code >= 400:
+                log.warning(
+                    "_chat_responses: error body=%s", r.text[:500]
+                )
             r.raise_for_status()
             return self._responses_to_openai(r.json())
 
@@ -513,23 +518,50 @@ def _resolve_from_store(provider: str) -> tuple[str, str]:
             if pid in data.profiles and pid not in candidates:
                 candidates.append(pid)
 
+        log.info(
+            "_resolve_from_store: provider=%s candidates=%s lastGood=%s "
+            "order_keys=%s profile_ids=%s",
+            provider, candidates, last_good,
+            list(data.order.keys()), list(data.profiles.keys()),
+        )
+
         for pid in candidates:
             raw = data.profiles[pid]
             ctype = raw.get("type")
+            log.info(
+                "_resolve_from_store: checking pid=%s type=%s",
+                pid, ctype,
+            )
             if ctype == "api_key":
+                log.info("_resolve_from_store: → api_key found")
                 return raw.get("key", ""), ""
             elif ctype == "token":
                 expires = raw.get("expires")
                 if expires and expires < now_ms:
+                    log.info("_resolve_from_store: token %s expired", pid)
                     continue
+                log.info("_resolve_from_store: → token found")
                 return "", raw.get("token", "")
             elif ctype == "oauth":
                 expires = raw.get("expires", 0)
                 if expires < now_ms:
+                    log.info(
+                        "_resolve_from_store: oauth %s expired "
+                        "(expires=%s now=%s)",
+                        pid, expires, now_ms,
+                    )
                     continue  # Expired; skip (no refresh in sync path)
+                log.info("_resolve_from_store: → oauth access token found")
                 return "", raw.get("access", "")
-    except Exception:
-        pass
+            else:
+                log.info(
+                    "_resolve_from_store: unknown type %s for pid=%s",
+                    ctype, pid,
+                )
+
+        log.info("_resolve_from_store: no usable credential found for %s", provider)
+    except Exception as exc:
+        log.warning("_resolve_from_store: exception: %s", exc)
     return "", ""
 
 
@@ -551,17 +583,32 @@ def make_llm_client() -> BaseLLMClient:
     base_url = os.environ.get("LLM_BASE_URL", "")
     env_api_key = os.environ.get("LLM_API_KEY", "")
 
+    log.info(
+        "make_llm_client: provider=%s base_url_set=%s env_api_key_set=%s",
+        provider, bool(base_url), bool(env_api_key),
+    )
+
     if provider == "anthropic":
         # Try store first, fall back to env var.
         api_key, _ = _resolve_from_store("anthropic")
         if not api_key:
             api_key = env_api_key
+        log.info("make_llm_client: → AnthropicClient key_set=%s", bool(api_key))
         return AnthropicClient(api_key=api_key)
 
     # openai_compatible | ollama | custom_http
     # Check store for an OAuth token (codex flow) first.
     store_key, store_oauth = _resolve_from_store("openai-codex")
+    log.info(
+        "make_llm_client: store lookup provider=openai-codex → "
+        "store_key_set=%s store_oauth_set=%s",
+        bool(store_key), bool(store_oauth),
+    )
     if store_oauth:
+        log.info(
+            "make_llm_client: → OpenAICompatibleClient auth_mode=codex_oauth "
+            "(will use /v1/responses)"
+        )
         return OpenAICompatibleClient(
             provider=provider,
             base_url=base_url,
@@ -572,6 +619,11 @@ def make_llm_client() -> BaseLLMClient:
 
     # No OAuth in store — use API key (store or env var).
     api_key = store_key or env_api_key
+    log.info(
+        "make_llm_client: → OpenAICompatibleClient auth_mode=api_key "
+        "key_set=%s (will use /v1/chat/completions)",
+        bool(api_key),
+    )
     return OpenAICompatibleClient(
         provider=provider,
         base_url=base_url,
