@@ -323,36 +323,92 @@ class OpenAICompatibleClient(BaseLLMClient):
     async def _consume_sse(response: httpx.Response) -> dict:
         """Read an SSE stream and return the completed Responses API object.
 
-        The ChatGPT backend requires ``stream: true``.  We accumulate
-        the full response from the ``response.completed`` event which
-        carries the entire response object including all output items.
+        The ChatGPT backend requires ``stream: true``.  We try to capture
+        the full response from the ``response.completed`` event.  As a
+        fallback we accumulate output items from ``response.output_item.done``
+        events and text deltas from ``response.output_text.delta`` events,
+        then build the response ourselves.
         """
         completed: dict = {}
+        created: dict = {}
+        done_items: list[dict] = []
+        text_deltas: list[str] = []
         event_type = ""
+        seen_events: set[str] = set()
 
         async for raw_line in response.aiter_lines():
             line = raw_line.strip()
             if not line:
-                # Empty line = event boundary; reset for next event
                 event_type = ""
                 continue
             if line.startswith("event:"):
                 event_type = line[len("event:"):].strip()
+                seen_events.add(event_type)
                 continue
-            if line.startswith("data:"):
-                data_str = line[len("data:"):].strip()
-                if data_str == "[DONE]":
-                    break
-                if event_type == "response.completed":
-                    try:
-                        completed = json.loads(data_str)
-                    except json.JSONDecodeError:
-                        log.warning("_consume_sse: bad JSON in response.completed")
+            if not line.startswith("data:"):
                 continue
+            data_str = line[len("data:"):].strip()
+            if data_str == "[DONE]":
+                break
 
-        if not completed:
-            log.warning("_consume_sse: no response.completed event received")
-        return completed
+            if event_type == "response.completed":
+                try:
+                    completed = json.loads(data_str)
+                except json.JSONDecodeError:
+                    pass
+            elif event_type == "response.created":
+                try:
+                    created = json.loads(data_str)
+                except json.JSONDecodeError:
+                    pass
+            elif event_type == "response.output_item.done":
+                try:
+                    done_items.append(json.loads(data_str))
+                except json.JSONDecodeError:
+                    pass
+            elif event_type == "response.output_text.delta":
+                try:
+                    delta = json.loads(data_str)
+                    text_deltas.append(delta.get("delta", ""))
+                except json.JSONDecodeError:
+                    pass
+
+        log.debug("_consume_sse: events_seen=%s", sorted(seen_events))
+
+        if completed:
+            return completed
+
+        # Fallback: build response from accumulated items / deltas
+        if done_items:
+            log.debug(
+                "_consume_sse: no response.completed, building from %d done_items",
+                len(done_items),
+            )
+            return {
+                "id": created.get("id", ""),
+                "model": created.get("model", ""),
+                "status": "completed",
+                "output": done_items,
+            }
+
+        if text_deltas:
+            log.debug(
+                "_consume_sse: no done_items, building from %d text deltas",
+                len(text_deltas),
+            )
+            return {
+                "id": created.get("id", ""),
+                "model": created.get("model", ""),
+                "status": "completed",
+                "output": [{
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "".join(text_deltas)}],
+                }],
+            }
+
+        log.warning("_consume_sse: no usable events received (saw: %s)", sorted(seen_events))
+        return {}
 
 
 # ── Anthropic ─────────────────────────────────────────────────────────────────
