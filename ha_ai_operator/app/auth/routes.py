@@ -100,22 +100,21 @@ async def oauth_start() -> Dict[str, Any]:
         generate_state,
         build_authorize_url,
         store_pkce_session,
-        start_callback_server,
     )
     verifier, challenge = generate_pkce()
     state = generate_state()
     store_pkce_session(state, verifier)
     auth_url = build_authorize_url(state, challenge)
-    cb_active = await start_callback_server(state)
-    log.info("oauth: started flow state=%s callback_server=%s", state, cb_active)
+    log.info("oauth: started flow state=%s", state)
     return {
         "auth_url": auth_url,
         "state": state,
-        "callback_server_active": cb_active,
+        "callback_server_active": False,
         "redirect_uri": "http://localhost:1455/auth/callback",
         "note": (
-            "Open auth_url in your browser. "
-            "If the callback server is not active, paste the full redirect URL or code below."
+            "Open auth_url in your browser. After login, the browser will show "
+            "ERR_CONNECTION_REFUSED — this is expected. Copy the full URL from "
+            "the address bar and paste it below."
         ),
     }
 

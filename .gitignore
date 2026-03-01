@@ -27,3 +27,4 @@ secrets.yaml
 data/
 
 CLAUDE.md
+.claude/

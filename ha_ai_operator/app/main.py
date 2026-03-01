@@ -503,11 +503,14 @@ _UI_HTML = """<!DOCTYPE html>
     <!-- OpenAI Codex OAuth -->
     <div class="auth-section">
       <h3>OpenAI Codex — OAuth (PKCE)</h3>
-      <p style="font-size:.8rem;color:var(--muted)">
-        Starts a browser-based login. The callback server only works if your browser
-        runs on the same host as HA. <strong style="color:var(--orange)">Always use the paste
-        fallback below.</strong>
-      </p>
+      <ol style="font-size:.8rem;color:var(--muted);line-height:1.9;padding-left:1.2em;">
+        <li>Click <strong style="color:var(--text)">Start Login</strong> — a login link appears below.</li>
+        <li>Open the link in your browser and log in at OpenAI.</li>
+        <li>After login, the browser tries to open <code style="background:#0f172a;padding:1px 5px;border-radius:3px">http://localhost:1455/auth/callback?code=…</code><br>
+            The page will show <strong style="color:var(--orange)">ERR_CONNECTION_REFUSED</strong> — this is <em>normal and expected</em>.</li>
+        <li><strong style="color:var(--text)">Copy the full URL</strong> from the browser's address bar (it contains <code style="background:#0f172a;padding:1px 4px;border-radius:3px">?code=…</code>).</li>
+        <li>Paste it into the field below and click <strong style="color:var(--text)">Submit Code</strong>.</li>
+      </ol>
       <div class="auth-row">
         <button class="auth-btn" onclick="startOAuth()">Start Login</button>
         <span id="oauth-status-text" style="font-size:.78rem;color:var(--muted)"></span>
@@ -515,7 +518,7 @@ _UI_HTML = """<!DOCTYPE html>
       <div class="auth-url-box" id="oauth-url-box"></div>
       <div class="auth-row" style="gap:8px;flex-wrap:wrap;">
         <input id="oauth-code-input" class="auth-input"
-               placeholder="Paste full redirect URL, code#state, or bare code here" />
+               placeholder="Paste full redirect URL from browser address bar here" />
         <button class="auth-btn secondary" onclick="completeOAuth()">Submit Code</button>
       </div>
       <div class="auth-result" id="oauth-result"></div>
@@ -564,7 +567,6 @@ _UI_HTML = """<!DOCTYPE html>
     let diagHidden = false;
     let reqCounter = 0;
     let lastAuditError = '';
-    let oauthPollInterval = null;
     const uiSessionId = Math.random().toString(36).slice(2, 10);
 
     function clip(value, maxLen = 240) {
@@ -876,54 +878,35 @@ _UI_HTML = """<!DOCTYPE html>
       showAuthResult('oauth-result', null, 'Starting OAuth flow…');
       $('oauth-url-box').style.display = 'none';
       $('oauth-status-text').textContent = '';
-      if (oauthPollInterval) { clearInterval(oauthPollInterval); oauthPollInterval = null; }
       try {
         const r = await fetch(apiUrl('oauth/openai-codex/start'), {method: 'POST'});
         const d = await r.json();
         if (!r.ok) { showAuthResult('oauth-result', false, d.detail || 'Start failed'); return; }
         const urlBox = $('oauth-url-box');
         urlBox.style.display = 'block';
-        urlBox.innerHTML = '<a href="' + esc(d.auth_url) + '" target="_blank" rel="noopener" style="color:#7dd3fc">' +
-          'Open this URL in your browser</a><br><small style="color:var(--muted)">' +
-          esc(d.auth_url) + '</small>';
-        const cbNote = d.callback_server_active
-          ? 'Callback server active on :1455 (auto-poll enabled).'
-          : 'Callback server unavailable — paste the redirect URL or code below.';
-        $('oauth-status-text').textContent = cbNote;
-        showAuthResult('oauth-result', null, 'Authorize in your browser, then paste the redirect URL or code below.');
-        if (d.callback_server_active) {
-          oauthPollInterval = setInterval(pollOAuthStatus, 2000);
-        }
+        urlBox.innerHTML = '<strong style="color:var(--text)">Step 2:</strong> ' +
+          '<a href="' + esc(d.auth_url) + '" target="_blank" rel="noopener" style="color:#7dd3fc">Open this login link in your browser</a>' +
+          '<br><small style="color:var(--muted);word-break:break-all">' + esc(d.auth_url) + '</small>';
+        $('oauth-status-text').textContent = 'Login link ready.';
+        showAuthResult('oauth-result', null,
+          'After login: copy the full URL from your browser address bar (even if it shows an error page), then paste it below.');
       } catch(e) {
         showAuthResult('oauth-result', false, 'Network error: ' + (e.message || String(e)));
       }
     }
 
-    async function pollOAuthStatus() {
-      try {
-        const r = await fetch(apiUrl('oauth/openai-codex/status'));
-        const d = await r.json();
-        if (d.received) {
-          clearInterval(oauthPollInterval); oauthPollInterval = null;
-          $('oauth-status-text').textContent = 'Callback received! Exchanging tokens…';
-          await completeOAuth(true);
-        }
-      } catch(_e) {}
-    }
-
-    async function completeOAuth(fromCallback) {
-      const codeInput = fromCallback ? '' : ($('oauth-code-input').value || '').trim();
-      if (!fromCallback && !codeInput) {
-        showAuthResult('oauth-result', false, 'Please paste the redirect URL or code first.');
+    async function completeOAuth() {
+      const codeInput = ($('oauth-code-input').value || '').trim();
+      if (!codeInput) {
+        showAuthResult('oauth-result', false, 'Please paste the redirect URL from your browser address bar first.');
         return;
       }
-      showAuthResult('oauth-result', null, 'Exchanging tokens…');
+      showAuthResult('oauth-result', null, 'Exchanging tokens with OpenAI…');
       try {
-        const body = fromCallback ? {input: 'callback'} : {input: codeInput};
         const r = await fetch(apiUrl('oauth/openai-codex/complete'), {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify(body)
+          body: JSON.stringify({input: codeInput})
         });
         const d = await r.json();
         if (!r.ok) {
@@ -933,7 +916,7 @@ _UI_HTML = """<!DOCTYPE html>
         showAuthResult('oauth-result', true,
           'Saved! Profile ' + esc(d.profileId) +
           (d.expiresIso ? ' — expires ' + esc(d.expiresIso) : ''));
-        if (!fromCallback) $('oauth-code-input').value = '';
+        $('oauth-code-input').value = '';
         loadProfiles();
       } catch(e) {
         showAuthResult('oauth-result', false, 'Network error: ' + (e.message || String(e)));
