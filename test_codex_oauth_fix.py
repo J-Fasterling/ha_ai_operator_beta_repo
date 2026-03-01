@@ -31,12 +31,23 @@ class MockHandler(BaseHTTPRequestHandler):
                 "content": [{"type": "output_text", "text": "ok"}],
             }],
         }
-        payload = json.dumps(response).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(payload)))
-        self.end_headers()
-        self.wfile.write(payload)
+        # If stream requested, return SSE format
+        if body.get("stream"):
+            resp_json = json.dumps(response)
+            sse = f"event: response.completed\ndata: {resp_json}\n\ndata: [DONE]\n\n"
+            payload = sse.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+        else:
+            payload = json.dumps(response).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
 
     def log_message(self, *a):
         pass
@@ -159,7 +170,8 @@ async def test_codex_oauth_sends_responses_format():
     assert "messages" not in body, "Should NOT have 'messages'"
     assert body["instructions"] == "You are a helper."
     assert body.get("store") is False, "Must set store=false for ChatGPT backend"
-    print("  PASS: codex_oauth sends Responses API format with store=false")
+    assert body.get("stream") is True, "Must set stream=true for ChatGPT backend"
+    print("  PASS: codex_oauth sends Responses API format with store=false, stream=true")
 
 
 async def test_api_key_sends_chat_completions_format():

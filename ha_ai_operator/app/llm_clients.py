@@ -299,6 +299,7 @@ class OpenAICompatibleClient(BaseLLMClient):
             "input": input_items,
             "temperature": temperature,
             "store": False,
+            "stream": True,
         }
         if instructions:
             payload["instructions"] = instructions
@@ -307,14 +308,52 @@ class OpenAICompatibleClient(BaseLLMClient):
             payload["tool_choice"] = "auto"
 
         async with httpx.AsyncClient(timeout=120.0) as client:
-            r = await client.post(url, json=payload, headers=self._headers())
-            log.debug("_chat_responses: status=%s", r.status_code)
-            if r.status_code >= 400:
-                log.warning(
-                    "_chat_responses: error body=%s", r.text[:500]
+            async with client.stream(
+                "POST", url, json=payload, headers=self._headers(),
+            ) as r:
+                log.debug("_chat_responses: status=%s", r.status_code)
+                if r.status_code >= 400:
+                    body = await r.aread()
+                    log.warning("_chat_responses: error body=%s", body[:500])
+                    r.raise_for_status()
+                return self._responses_to_openai(
+                    await self._consume_sse(r)
                 )
-            r.raise_for_status()
-            return self._responses_to_openai(r.json())
+
+    @staticmethod
+    async def _consume_sse(response: httpx.Response) -> dict:
+        """Read an SSE stream and return the completed Responses API object.
+
+        The ChatGPT backend requires ``stream: true``.  We accumulate
+        the full response from the ``response.completed`` event which
+        carries the entire response object including all output items.
+        """
+        completed: dict = {}
+        event_type = ""
+
+        async for raw_line in response.aiter_lines():
+            line = raw_line.strip()
+            if not line:
+                # Empty line = event boundary; reset for next event
+                event_type = ""
+                continue
+            if line.startswith("event:"):
+                event_type = line[len("event:"):].strip()
+                continue
+            if line.startswith("data:"):
+                data_str = line[len("data:"):].strip()
+                if data_str == "[DONE]":
+                    break
+                if event_type == "response.completed":
+                    try:
+                        completed = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        log.warning("_consume_sse: bad JSON in response.completed")
+                continue
+
+        if not completed:
+            log.warning("_consume_sse: no response.completed event received")
+        return completed
 
 
 # ── Anthropic ─────────────────────────────────────────────────────────────────
