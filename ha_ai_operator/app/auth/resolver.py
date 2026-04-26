@@ -6,7 +6,7 @@ Resolution order:
   3. First entry in order[provider]
 
 Never call this with asyncio.run() — it must run inside the Uvicorn event loop.
-The sync fallback in llm_clients.py reads the store directly without refresh logic.
+The sync fallback in llm_clients.py has its own minimal refresh path for Codex.
 """
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ import logging
 import time
 from typing import Optional
 
-from auth.store import AuthStore, OAuthCredential, TokenCredential, ApiKeyCredential
+from auth.store import AuthStore, OAuthCredential, ApiKeyCredential
 
 log = logging.getLogger("ha_ai_operator.auth.resolver")
 
@@ -63,16 +63,6 @@ async def resolve_token(
             cred = ApiKeyCredential.model_validate(raw)
             store.set_last_good(provider, pid)
             return cred.key
-
-        elif cred_type == "token":
-            cred = TokenCredential.model_validate(raw)
-            now_ms = int(time.time() * 1000)
-            if cred.expires and cred.expires < now_ms:
-                log.warning("resolver: token %s expired", pid)
-                mark_profile_failed(pid, "expired", store)
-                continue
-            store.set_last_good(provider, pid)
-            return cred.token
 
         elif cred_type == "oauth":
             cred = OAuthCredential.model_validate(raw)

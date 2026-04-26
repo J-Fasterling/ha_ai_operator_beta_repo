@@ -35,13 +35,6 @@ class ApiKeyCredential(BaseModel):
     key: str
 
 
-class TokenCredential(BaseModel):
-    type: str = "token"
-    provider: str = "anthropic"
-    token: str
-    expires: Optional[int] = None  # ms epoch; None = no expiry
-
-
 class OAuthCredential(BaseModel):
     type: str = "oauth"
     provider: str = "openai-codex"
@@ -53,7 +46,7 @@ class OAuthCredential(BaseModel):
     email: Optional[str] = None
 
 
-AnyCredential = ApiKeyCredential | TokenCredential | OAuthCredential
+AnyCredential = ApiKeyCredential | OAuthCredential
 
 
 class UsageStats(BaseModel):

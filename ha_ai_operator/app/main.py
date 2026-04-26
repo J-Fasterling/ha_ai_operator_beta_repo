@@ -133,7 +133,7 @@ async def health(request: Request) -> dict[str, Any]:
         "llm_model": os.environ.get("LLM_MODEL", ""),
         "llm_model_set": bool(os.environ.get("LLM_MODEL", "")),
         "llm_base_url_set": bool(os.environ.get("LLM_BASE_URL", "")),
-        "llm_api_key_set": bool(os.environ.get("LLM_API_KEY", "")),
+        "llm_oauth_token_set": bool(os.environ.get("LLM_OAUTH_TOKEN", "")),
         "allow_supervisor_api": os.environ.get("ALLOW_SUPERVISOR_API", "false"),
         "confirmation_required": os.environ.get("CONFIRMATION_REQUIRED", "true"),
         "max_actions_per_turn": os.environ.get("MAX_ACTIONS_PER_TURN", "5"),
@@ -249,7 +249,7 @@ async def selftest(request: Request) -> dict[str, Any]:
     checks["mode"] = os.environ.get("MODE", "unset")
     checks["llm_provider"] = os.environ.get("LLM_PROVIDER", "unset")
     checks["llm_base_url_set"] = bool(os.environ.get("LLM_BASE_URL", ""))
-    checks["llm_api_key_set"] = bool(os.environ.get("LLM_API_KEY", ""))
+    checks["llm_oauth_token_set"] = bool(os.environ.get("LLM_OAUTH_TOKEN", ""))
     checks["allow_supervisor_api"] = os.environ.get("ALLOW_SUPERVISOR_API", "false")
 
     all_ok: bool = bool(
@@ -299,140 +299,188 @@ _UI_HTML = """<!DOCTYPE html>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
-      --bg: #111827; --surface: #1f2937; --border: #374151;
-      --accent: #38bdf8; --text: #e5e7eb; --muted: #6b7280;
-      --green: #22c55e; --orange: #f97316; --red: #ef4444;
+      --ha-blue: #03a9f4;
+      --ha-blue-dark: #0288d1;
+      --bg: #f4f6fb;
+      --surface: #ffffff;
+      --surface-soft: #eef3f8;
+      --surface-raised: #ffffff;
+      --border: #d9e2ec;
+      --text: #1f2937;
+      --muted: #697586;
+      --subtle: #8a97a8;
+      --shadow: 0 1px 2px rgba(15, 23, 42, .08), 0 8px 24px rgba(15, 23, 42, .06);
+      --green: #0f9d58;
+      --orange: #f2994a;
+      --red: #db4437;
+      --radius: 8px;
+      --input-bg: #ffffff;
+      --code-bg: #e8eef5;
     }
-    body { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #111827;
+        --surface: #1f2937;
+        --surface-soft: #172033;
+        --surface-raised: #223044;
+        --border: #344256;
+        --text: #e5eef8;
+        --muted: #a5b4c4;
+        --subtle: #7d8da0;
+        --shadow: 0 1px 2px rgba(0, 0, 0, .28), 0 12px 32px rgba(0, 0, 0, .2);
+        --input-bg: #111827;
+        --code-bg: #111827;
+      }
+    }
+    body { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
            background: var(--bg); color: var(--text); height: 100vh;
-           display: flex; flex-direction: column; overflow: hidden; }
+           display: flex; flex-direction: column; overflow: hidden;
+           font-size: 14px; letter-spacing: 0; }
     /* ── header ── */
-    header { background: var(--surface); border-bottom: 1px solid var(--border);
-             padding: 10px 18px; display: flex; align-items: center; gap: 12px;
-             flex-shrink: 0; }
-    header h1 { font-size: 1.05rem; font-weight: 700; color: var(--accent); }
-    .badges { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
-    .badge { padding: 3px 9px; border-radius: 999px; font-size: .72rem;
-             font-weight: 600; white-space: nowrap; }
-    .badge-read_only    { background:#14532d; color:#86efac; }
-    .badge-control_assist { background:#7c2d12; color:#fdba74; }
-    .badge-ops_write    { background:#7f1d1d; color:#fca5a5; }
-    .badge-sup  { background:#4c1d95; color:#c4b5fd; }
-    .badge-prov { background:#0c4a6e; color:#7dd3fc; }
+    header { background: var(--ha-blue); color: #fff; min-height: 56px;
+             padding: 0 18px; display: flex; align-items: center; gap: 12px;
+             flex-shrink: 0; box-shadow: 0 1px 0 rgba(0,0,0,.1); }
+    header h1 { font-size: 1rem; font-weight: 600; color: #fff; letter-spacing: 0; }
+    .badges { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+    .badge { padding: 5px 10px; border-radius: 999px; font-size: .72rem;
+             font-weight: 700; white-space: nowrap; background: rgba(255,255,255,.2);
+             color: #fff; border: 1px solid rgba(255,255,255,.24); }
+    .badge-read_only,
+    .badge-control_assist,
+    .badge-ops_write,
+    .badge-sup,
+    .badge-prov { background: rgba(255,255,255,.2); color: #fff; border-color: rgba(255,255,255,.28); }
     /* ── tab nav ── */
     .tabs { background: var(--surface); border-bottom: 1px solid var(--border);
-            display: flex; gap: 0; flex-shrink: 0; }
-    .tab-btn { background: none; border: none; border-bottom: 2px solid transparent;
-               color: var(--muted); cursor: pointer; padding: 8px 20px;
-               font-size: .85rem; font-weight: 600; transition: color .15s; }
-    .tab-btn:hover { color: var(--text); }
-    .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+            display: flex; gap: 4px; flex-shrink: 0; padding: 0 12px; }
+    .tab-btn { background: none; border: none; border-bottom: 3px solid transparent;
+               color: var(--muted); cursor: pointer; padding: 12px 18px 10px;
+               font-size: .86rem; font-weight: 600; transition: color .15s, background .15s;
+               min-width: 72px; }
+    .tab-btn:hover { color: var(--text); background: var(--surface-soft); }
+    .tab-btn.active { color: var(--ha-blue); border-bottom-color: var(--ha-blue); }
     /* ── tab content ── */
     .tab-content { display: none; flex: 1; overflow: hidden; }
     .tab-content.active { display: flex; }
     /* ── main layout (chat+audit) ── */
-    .layout { display: flex; flex: 1; overflow: hidden; }
+    .layout { display: flex; flex: 1; overflow: hidden; padding: 16px; gap: 16px; }
     /* ── chat panel ── */
-    .chat { flex: 1; display: flex; flex-direction: column; padding: 14px;
-            gap: 10px; min-width: 0; }
+    .chat { flex: 1; display: flex; flex-direction: column;
+            gap: 12px; min-width: 0; }
     .messages { flex: 1; overflow-y: auto; display: flex;
-                flex-direction: column; gap: 10px; padding: 4px 0; }
-    .msg { padding: 11px 15px; border-radius: 12px; max-width: 82%;
-           line-height: 1.55; word-wrap: break-word; white-space: pre-wrap; }
-    .msg.user      { background: #1e3a5f; align-self: flex-end; }
-    .msg.assistant { background: var(--surface); align-self: flex-start;
-                     border: 1px solid var(--border); }
+                flex-direction: column; gap: 12px; padding: 4px 4px 10px; }
+    .msg { padding: 12px 14px; border-radius: var(--radius); max-width: min(760px, 84%);
+           line-height: 1.55; word-wrap: break-word; white-space: pre-wrap; box-shadow: var(--shadow); }
+    .msg.user      { background: var(--ha-blue); color: #fff; align-self: flex-end;
+                     border-bottom-right-radius: 3px; }
+    .msg.assistant { background: var(--surface-raised); align-self: flex-start;
+                     border: 1px solid var(--border); border-bottom-left-radius: 3px; }
     .msg.system    { background: transparent; align-self: center;
-                     color: var(--muted); font-size: .8rem; font-style: italic; }
-    .msg code   { background: #0f172a; padding: 1px 5px; border-radius: 4px;
+                     color: var(--muted); font-size: .82rem; font-style: normal;
+                     box-shadow: none; max-width: 100%; }
+    .msg code   { background: var(--code-bg); padding: 2px 5px; border-radius: 4px;
                   font-family: monospace; font-size: .88em; }
-    .msg strong { color: var(--accent); }
-    .typing { color: var(--muted); font-style: italic; font-size: .82rem;
+    .msg.user code { background: rgba(255,255,255,.18); }
+    .msg strong { color: var(--ha-blue); }
+    .msg.user strong { color: #fff; }
+    .typing { color: var(--muted); font-style: normal; font-size: .82rem;
               padding: 2px 0; flex-shrink: 0; }
     .input-row { display: flex; gap: 8px; flex-shrink: 0; }
-    textarea { flex: 1; background: var(--surface); border: 1px solid var(--border);
-               border-radius: 8px; color: var(--text); padding: 9px 13px;
+    textarea { flex: 1; background: var(--input-bg); border: 1px solid var(--border);
+               border-radius: var(--radius); color: var(--text); padding: 12px 13px;
                font-size: .93rem; resize: none; font-family: inherit;
-               min-height: 44px; max-height: 140px; }
-    textarea:focus { outline: none; border-color: var(--accent); }
-    .send { background: var(--accent); color: #0c1520; border: none;
-            border-radius: 8px; padding: 9px 20px; font-weight: 700;
-            cursor: pointer; align-self: flex-end; }
-    .send:hover { background: #7dd3fc; }
-    .send:disabled { background: var(--border); color: var(--muted);
+               min-height: 46px; max-height: 140px; box-shadow: var(--shadow); }
+    textarea:focus { outline: none; border-color: var(--ha-blue); box-shadow: 0 0 0 3px rgba(3,169,244,.16); }
+    .send { background: var(--ha-blue); color: #fff; border: none;
+            border-radius: var(--radius); padding: 0 22px; font-weight: 700;
+            cursor: pointer; align-self: stretch; min-width: 86px; }
+    .send:hover { background: var(--ha-blue-dark); }
+    .send:disabled { background: var(--border); color: var(--subtle);
                      cursor: not-allowed; }
     /* ── audit panel ── */
-    .audit { width: 360px; background: var(--surface);
-             border-left: 1px solid var(--border);
-             display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0; }
-    .panel-hdr { padding: 10px 14px; font-size: .78rem; font-weight: 700;
-                 color: var(--accent); border-bottom: 1px solid var(--border);
-                 text-transform: uppercase; letter-spacing: .06em; flex-shrink: 0; }
-    .audit-list { flex: 1; overflow-y: auto; padding: 8px; display: flex;
-                  flex-direction: column; gap: 5px; }
-    .ae { background: var(--bg); border-radius: 6px; padding: 7px 9px;
-          font-size: .72rem; border-left: 3px solid var(--muted); }
+    .audit { width: 370px; background: var(--surface);
+             border: 1px solid var(--border); border-radius: var(--radius);
+             display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0;
+             box-shadow: var(--shadow); }
+    .panel-hdr { padding: 12px 14px; font-size: .76rem; font-weight: 800;
+                 color: var(--muted); border-bottom: 1px solid var(--border);
+                 text-transform: uppercase; letter-spacing: .08em; flex-shrink: 0;
+                 background: var(--surface); }
+    .audit-list { flex: 1; overflow-y: auto; padding: 10px; display: flex;
+                  flex-direction: column; gap: 8px; }
+    .ae { background: var(--surface-soft); border-radius: var(--radius); padding: 9px 10px;
+          font-size: .72rem; border-left: 4px solid var(--muted); }
     .ae.r-read   { border-color: var(--green); }
     .ae.r-low    { border-color: #84cc16; }
     .ae.r-medium { border-color: var(--orange); }
     .ae.r-high   { border-color: var(--red); }
-    .ae-tool { font-weight: 700; color: var(--accent); }
+    .ae-tool { font-weight: 700; color: var(--ha-blue); }
     .ae-time { color: var(--muted); float: right; }
     .ae-line { color: var(--muted); margin-top: 3px;
                overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .refresh-btn { border: none; background: none; color: var(--accent);
-                   cursor: pointer; padding: 8px 14px; font-size: .75rem;
+    .refresh-btn { border: none; background: var(--surface); color: var(--ha-blue);
+                   cursor: pointer; padding: 10px 14px; font-size: .78rem; font-weight: 700;
                    border-top: 1px solid var(--border); flex-shrink: 0; }
-    .diag { border: 1px solid var(--border); border-radius: 8px;
-            background: #0b1220; overflow: hidden; flex-shrink: 0; }
+    .diag { border: 1px solid var(--border); border-radius: var(--radius);
+            background: var(--surface); overflow: hidden; flex-shrink: 0; box-shadow: var(--shadow); }
     .diag-hdr { display: flex; align-items: center; justify-content: space-between;
                 padding: 7px 10px; border-bottom: 1px solid var(--border);
-                font-size: .72rem; color: var(--accent); text-transform: uppercase;
+                font-size: .72rem; color: var(--muted); text-transform: uppercase;
                 letter-spacing: .05em; }
-    .diag-btn { border: none; background: transparent; color: var(--accent);
+    .diag-btn { border: none; background: transparent; color: var(--ha-blue);
                 cursor: pointer; font-size: .69rem; font-weight: 700; }
     .diag-body { font-family: ui-monospace,SFMono-Regular,Menlo,monospace;
-                 font-size: .68rem; color: #93a3b8; max-height: 140px;
+                 font-size: .68rem; color: var(--muted); max-height: 140px;
                  overflow-y: auto; white-space: pre-wrap; line-height: 1.5;
-                 padding: 7px 10px; }
+                 padding: 8px 10px; background: var(--surface-soft); }
     .diag.hidden .diag-body { display: none; }
     .diag.hidden .diag-hdr { border-bottom: none; }
-    @media (max-width: 700px) { .audit { display: none; } }
+    @media (max-width: 820px) {
+      header { min-height: 52px; padding: 0 12px; }
+      header h1 { font-size: .94rem; }
+      .tabs { padding: 0 6px; }
+      .tab-btn { flex: 1; padding-left: 6px; padding-right: 6px; min-width: 0; }
+      .layout { padding: 10px; }
+      .audit { display: none; }
+      .msg { max-width: 94%; }
+      .badges { gap: 5px; }
+      .badge { padding: 4px 7px; font-size: .66rem; }
+    }
     /* ── auth tab ── */
-    #tab-auth { flex-direction: column; overflow-y: auto; padding: 20px; gap: 20px; }
+    #tab-auth { flex-direction: column; overflow-y: auto; padding: 16px; gap: 16px; }
     .auth-section { background: var(--surface); border: 1px solid var(--border);
-                    border-radius: 10px; padding: 16px; display: flex;
-                    flex-direction: column; gap: 12px; }
-    .auth-section h3 { font-size: .9rem; font-weight: 700; color: var(--accent);
+                    border-radius: var(--radius); padding: 16px; display: flex;
+                    flex-direction: column; gap: 12px; box-shadow: var(--shadow); }
+    .auth-section h3 { font-size: .95rem; font-weight: 700; color: var(--text);
                         margin-bottom: 4px; }
     .auth-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     .auth-row label { font-size: .8rem; color: var(--muted); min-width: 80px; }
-    .auth-input { flex: 1; background: var(--bg); border: 1px solid var(--border);
-                  border-radius: 6px; color: var(--text); padding: 7px 11px;
+    .auth-input { flex: 1; background: var(--input-bg); border: 1px solid var(--border);
+                  border-radius: var(--radius); color: var(--text); padding: 9px 11px;
                   font-size: .85rem; font-family: inherit; min-width: 180px; }
-    .auth-input:focus { outline: none; border-color: var(--accent); }
-    .auth-btn { background: var(--accent); color: #0c1520; border: none;
-                border-radius: 6px; padding: 7px 16px; font-weight: 700;
+    .auth-input:focus { outline: none; border-color: var(--ha-blue); box-shadow: 0 0 0 3px rgba(3,169,244,.16); }
+    .auth-btn { background: var(--ha-blue); color: #fff; border: none;
+                border-radius: var(--radius); padding: 9px 16px; font-weight: 700;
                 font-size: .82rem; cursor: pointer; white-space: nowrap; }
-    .auth-btn:hover { background: #7dd3fc; }
-    .auth-btn.danger { background: #7f1d1d; color: #fca5a5; }
+    .auth-btn:hover { background: var(--ha-blue-dark); }
+    .auth-btn.danger { background: #fdecea; color: #b3261e; }
     .auth-btn.danger:hover { background: var(--red); color: #fff; }
-    .auth-btn.secondary { background: var(--border); color: var(--text); }
-    .auth-btn.secondary:hover { background: #4b5563; }
+    .auth-btn.secondary { background: var(--surface-soft); color: var(--text); border: 1px solid var(--border); }
+    .auth-btn.secondary:hover { background: var(--border); }
     .auth-result { font-size: .78rem; padding: 5px 9px; border-radius: 5px;
                    display: none; }
-    .auth-result.ok  { background: #14532d; color: #86efac; display: block; }
-    .auth-result.err { background: #7f1d1d; color: #fca5a5; display: block; }
-    .auth-result.info { background: #0c4a6e; color: #7dd3fc; display: block; }
-    .auth-url-box { background: var(--bg); border: 1px solid var(--border);
-                    border-radius: 6px; padding: 8px 11px; font-size: .75rem;
+    .auth-result.ok  { background: rgba(15,157,88,.14); color: var(--green); display: block; }
+    .auth-result.err { background: rgba(219,68,55,.14); color: var(--red); display: block; }
+    .auth-result.info { background: rgba(3,169,244,.14); color: var(--ha-blue); display: block; }
+    .auth-url-box { background: var(--surface-soft); border: 1px solid var(--border);
+                    border-radius: var(--radius); padding: 10px 11px; font-size: .75rem;
                     font-family: ui-monospace,monospace; word-break: break-all;
-                    color: #7dd3fc; display: none; }
+                    color: var(--ha-blue); display: none; }
     /* ── profiles table ── */
     .prof-table { width: 100%; border-collapse: collapse; font-size: .78rem; }
     .prof-table th { text-align: left; color: var(--muted); font-weight: 600;
                      padding: 5px 8px; border-bottom: 1px solid var(--border); }
-    .prof-table td { padding: 6px 8px; border-bottom: 1px solid #1f2937;
+    .prof-table td { padding: 8px; border-bottom: 1px solid var(--border);
                      vertical-align: middle; }
     .type-badge { padding: 2px 7px; border-radius: 999px; font-size: .68rem;
                   font-weight: 700; }
@@ -465,7 +513,7 @@ _UI_HTML = """<!DOCTYPE html>
         <div class="typing" id="typing" style="display:none">Agent is thinking…</div>
         <div class="input-row">
           <textarea id="input" rows="2"
-            placeholder="Ask about your home or give instructions… (Enter to send, Shift+Enter for newline)"></textarea>
+            placeholder="Ask about your home…"></textarea>
           <button class="send" id="sendBtn" onclick="send()">Send</button>
         </div>
         <div class="diag" id="diag">
@@ -522,27 +570,6 @@ _UI_HTML = """<!DOCTYPE html>
         <button class="auth-btn secondary" onclick="completeOAuth()">Submit Code</button>
       </div>
       <div class="auth-result" id="oauth-result"></div>
-    </div>
-
-    <!-- Anthropic -->
-    <div class="auth-section">
-      <h3>Anthropic</h3>
-      <div class="auth-row">
-        <label>API Key</label>
-        <input id="ant-key-input" class="auth-input" type="password"
-               placeholder="sk-ant-…" autocomplete="new-password" />
-        <button class="auth-btn" onclick="saveAnthropicKey()">Save Key</button>
-      </div>
-      <div class="auth-result" id="ant-key-result"></div>
-      <div class="auth-row">
-        <label>Setup Token</label>
-        <input id="ant-token-input" class="auth-input" type="password"
-               placeholder="Bearer token…" autocomplete="new-password" />
-        <input id="ant-expires-input" class="auth-input" style="max-width:180px;"
-               placeholder="Expires (ms epoch, optional)" />
-        <button class="auth-btn" onclick="saveAnthropicToken()">Save Token</button>
-      </div>
-      <div class="auth-result" id="ant-token-result"></div>
     </div>
 
     <!-- Profiles -->
@@ -920,49 +947,6 @@ _UI_HTML = """<!DOCTYPE html>
         loadProfiles();
       } catch(e) {
         showAuthResult('oauth-result', false, 'Network error: ' + (e.message || String(e)));
-      }
-    }
-
-    async function saveAnthropicKey() {
-      const key = ($('ant-key-input').value || '').trim();
-      if (!key) { showAuthResult('ant-key-result', false, 'Key must not be empty'); return; }
-      showAuthResult('ant-key-result', null, 'Saving…');
-      try {
-        const r = await fetch(apiUrl('auth/anthropic/api-key'), {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({key})
-        });
-        const d = await r.json();
-        if (!r.ok) { showAuthResult('ant-key-result', false, d.detail || 'Error'); return; }
-        showAuthResult('ant-key-result', true, 'Saved! Profile ' + esc(d.profileId));
-        $('ant-key-input').value = '';
-        loadProfiles();
-      } catch(e) {
-        showAuthResult('ant-key-result', false, 'Network error: ' + (e.message || String(e)));
-      }
-    }
-
-    async function saveAnthropicToken() {
-      const token = ($('ant-token-input').value || '').trim();
-      if (!token) { showAuthResult('ant-token-result', false, 'Token must not be empty'); return; }
-      const expiresRaw = ($('ant-expires-input').value || '').trim();
-      const expires_ms = expiresRaw ? parseInt(expiresRaw, 10) : null;
-      showAuthResult('ant-token-result', null, 'Saving…');
-      try {
-        const r = await fetch(apiUrl('auth/anthropic/setup-token'), {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({token, expires_ms})
-        });
-        const d = await r.json();
-        if (!r.ok) { showAuthResult('ant-token-result', false, d.detail || 'Error'); return; }
-        showAuthResult('ant-token-result', true, 'Saved! Profile ' + esc(d.profileId));
-        $('ant-token-input').value = '';
-        $('ant-expires-input').value = '';
-        loadProfiles();
-      } catch(e) {
-        showAuthResult('ant-token-result', false, 'Network error: ' + (e.message || String(e)));
       }
     }
 

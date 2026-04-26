@@ -13,14 +13,10 @@ Messages are always kept in OpenAI format inside the agent.  Each adapter
 converts to/from its native wire format transparently, so the agent loop
 never needs to know which backend is in use.
 
-Supported backends
-──────────────────
-  openai_compatible  Any endpoint implementing POST /chat/completions
-                     (OpenAI, Groq, Together, OpenRouter, LM Studio, …)
-  ollama             Local Ollama – defaults to http://localhost:11434/v1
-  custom_http        Alias for openai_compatible with an explicit base URL
-  anthropic          Anthropic Messages API (claude-* models)
-                     Uses x-api-key header and /v1/messages endpoint.
+Supported backend
+─────────────────
+  codex             ChatGPT Codex backend via OAuth, exposed internally as an
+                    OpenAI-compatible chat client for the agent.
 
 OAuth / Codex note
 ──────────────────
@@ -35,7 +31,6 @@ wire format and the OpenAI Chat Completions format transparently.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
@@ -60,7 +55,7 @@ class BaseLLMClient(ABC):
         """Return an OpenAI-compatible response dict."""
 
 
-# ── OpenAI-compatible (covers OpenAI, Groq, Ollama, custom HTTP) ──────────────
+# ── OpenAI-compatible wire adapter for Codex ──────────────────────────────────
 
 _CODEX_CHATGPT_BASE = "https://chatgpt.com/backend-api/codex"
 
@@ -83,8 +78,6 @@ class OpenAICompatibleClient(BaseLLMClient):
         # Resolve base URL
         if base_url:
             self._base = base_url.rstrip("/")
-        elif provider == "ollama":
-            self._base = "http://localhost:11434/v1"
         else:
             self._base = "https://api.openai.com/v1"
 
@@ -245,6 +238,11 @@ class OpenAICompatibleClient(BaseLLMClient):
             self._auth_mode, self._base, model,
         )
         if self._auth_mode == "codex_oauth":
+            if not (self._oauth_token or self._api_key):
+                raise RuntimeError(
+                    "Codex OAuth is not configured. Start the OpenAI Codex login "
+                    "in the Auth tab or set llm_oauth_token in the add-on config."
+                )
             return await self._chat_responses(messages, model, temperature, tools)
         return await self._chat_completions(messages, model, temperature, tools)
 
@@ -411,207 +409,49 @@ class OpenAICompatibleClient(BaseLLMClient):
         return {}
 
 
-# ── Anthropic ─────────────────────────────────────────────────────────────────
+# ── Store fallback ────────────────────────────────────────────────────────────
 
-_ANTHROPIC_API = "https://api.anthropic.com/v1/messages"
-_ANTHROPIC_VERSION = "2023-06-01"
-_ANTHROPIC_MAX_TOKENS = 4096
+def _refresh_oauth_profile_sync(profile_id: str, raw: dict[str, Any]) -> tuple[str, str]:
+    """Refresh an expired Codex OAuth profile from sync code.
 
-
-class AnthropicClient(BaseLLMClient):
-    """Adapter for the Anthropic Messages API.
-
-    Wire format differences vs OpenAI:
-    ┌─────────────────────────────────┬───────────────────────────────────────┐
-    │ OpenAI                          │ Anthropic                             │
-    ├─────────────────────────────────┼───────────────────────────────────────┤
-    │ POST /v1/chat/completions       │ POST /v1/messages                     │
-    │ Authorization: Bearer <key>     │ x-api-key: <key>                      │
-    │ messages[].role = "system"      │ top-level "system" string             │
-    │ messages[].role = "tool"        │ user message with tool_result blocks  │
-    │ assistant.tool_calls[].function │ assistant content tool_use blocks     │
-    │ tools[].function.parameters     │ tools[].input_schema                  │
-    │ finish_reason = "tool_calls"    │ stop_reason = "tool_use"              │
-    │ temperature 0–2                 │ temperature 0–1 (clamped)             │
-    └─────────────────────────────────┴───────────────────────────────────────┘
+    The agent constructs its LLM client synchronously per request, so it cannot
+    use the async resolver without changing the call graph. Keeping a small sync
+    refresh here avoids forcing users to re-login whenever the access token has
+    expired but the refresh token is still valid.
     """
+    refresh = raw.get("refresh", "")
+    if not refresh:
+        return "", ""
 
-    def __init__(self, api_key: str) -> None:
-        self._api_key = api_key
+    from auth.oauth_openai import _CLIENT_ID, _TOKEN_URL, decode_account_id
+    from auth.store import get_store
+    import time
 
-    # ── Format converters ─────────────────────────────────────────────────────
+    payload = {
+        "client_id": _CLIENT_ID,
+        "grant_type": "refresh_token",
+        "refresh_token": refresh,
+    }
+    with httpx.Client(timeout=30.0) as client:
+        response = client.post(
+            _TOKEN_URL,
+            data=payload,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        response.raise_for_status()
+        tokens = response.json()
 
-    @staticmethod
-    def _tools_to_anthropic(tools: list[dict]) -> list[dict]:
-        """OpenAI tools → Anthropic tools (rename parameters → input_schema)."""
-        result = []
-        for t in tools:
-            fn = t.get("function", {})
-            result.append(
-                {
-                    "name": fn.get("name", ""),
-                    "description": fn.get("description", ""),
-                    "input_schema": fn.get(
-                        "parameters", {"type": "object", "properties": {}}
-                    ),
-                }
-            )
-        return result
-
-    @staticmethod
-    def _messages_to_anthropic(
-        messages: list[dict],
-    ) -> tuple[str, list[dict]]:
-        """Split OpenAI-format messages into (system_string, anthropic_messages).
-
-        Rules:
-        - "system" roles are concatenated into the top-level system string.
-        - "user" roles are converted directly.
-        - "assistant" messages with tool_calls become assistant content blocks.
-        - "tool" roles become user messages with tool_result content blocks.
-          Consecutive tool results are merged into a single user message.
-        """
-        system_parts: list[str] = []
-        converted: list[dict] = []
-
-        for msg in messages:
-            role = msg.get("role", "")
-
-            if role == "system":
-                if msg.get("content"):
-                    system_parts.append(msg["content"])
-                continue
-
-            if role == "user":
-                converted.append(
-                    {"role": "user", "content": msg.get("content", "")}
-                )
-                continue
-
-            if role == "assistant":
-                tool_calls: list[dict] = msg.get("tool_calls") or []
-                text: str = msg.get("content") or ""
-                if tool_calls:
-                    blocks: list[dict] = []
-                    if text:
-                        blocks.append({"type": "text", "text": text})
-                    for tc in tool_calls:
-                        fn = tc.get("function", {})
-                        try:
-                            inp = json.loads(fn.get("arguments", "{}"))
-                        except json.JSONDecodeError:
-                            inp = {}
-                        blocks.append(
-                            {
-                                "type": "tool_use",
-                                "id": tc.get("id", f"toolu_{hashlib.md5(fn.get('name','').encode()).hexdigest()[:12]}"),
-                                "name": fn.get("name", ""),
-                                "input": inp,
-                            }
-                        )
-                    converted.append({"role": "assistant", "content": blocks})
-                else:
-                    converted.append(
-                        {"role": "assistant", "content": text or ""}
-                    )
-                continue
-
-            if role == "tool":
-                result_block = {
-                    "type": "tool_result",
-                    "tool_use_id": msg.get("tool_call_id", ""),
-                    "content": msg.get("content", ""),
-                }
-                # Merge consecutive tool results into one user message.
-                if converted and converted[-1]["role"] == "user" and isinstance(
-                    converted[-1]["content"], list
-                ):
-                    converted[-1]["content"].append(result_block)
-                else:
-                    converted.append({"role": "user", "content": [result_block]})
-                continue
-
-        return "\n\n".join(system_parts), converted
-
-    @staticmethod
-    def _response_to_openai(raw: dict) -> dict:
-        """Convert an Anthropic Messages response to OpenAI-compatible format."""
-        content_blocks: list[dict] = raw.get("content", [])
-        stop_reason: str = raw.get("stop_reason", "end_turn")
-
-        text_parts: list[str] = []
-        tool_calls: list[dict] = []
-
-        for block in content_blocks:
-            if block.get("type") == "text":
-                text_parts.append(block.get("text", ""))
-            elif block.get("type") == "tool_use":
-                tool_calls.append(
-                    {
-                        "id": block.get("id", ""),
-                        "type": "function",
-                        "function": {
-                            "name": block.get("name", ""),
-                            "arguments": json.dumps(block.get("input", {})),
-                        },
-                    }
-                )
-
-        finish_reason = "stop" if stop_reason == "end_turn" else "tool_calls"
-        message: dict[str, Any] = {
-            "role": "assistant",
-            "content": "\n".join(text_parts) or None,
-        }
-        if tool_calls:
-            message["tool_calls"] = tool_calls
-
-        return {
-            "choices": [
-                {"index": 0, "message": message, "finish_reason": finish_reason}
-            ],
-            "model": raw.get("model", ""),
-        }
-
-    # ── Main call ─────────────────────────────────────────────────────────────
-
-    async def chat(
-        self,
-        messages: list[dict[str, Any]],
-        model: str,
-        temperature: float,
-        tools: Optional[list[dict[str, Any]]] = None,
-    ) -> dict[str, Any]:
-        system, ant_messages = self._messages_to_anthropic(messages)
-        # Anthropic temperature range is 0–1; clamp if caller passes OpenAI range.
-        temp = max(0.0, min(1.0, temperature))
-
-        payload: dict[str, Any] = {
-            "model": model,
-            "max_tokens": _ANTHROPIC_MAX_TOKENS,
-            "messages": ant_messages,
-            "temperature": temp,
-        }
-        if system:
-            payload["system"] = system
-        if tools:
-            payload["tools"] = self._tools_to_anthropic(tools)
-
-        headers = {
-            "x-api-key": self._api_key,
-            "anthropic-version": _ANTHROPIC_VERSION,
-            "content-type": "application/json",
-        }
-
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            r = await client.post(_ANTHROPIC_API, json=payload, headers=headers)
-            r.raise_for_status()
-            return self._response_to_openai(r.json())
-
-
-# ── Store fallback (sync, no refresh) ─────────────────────────────────────────
+    access = tokens["access_token"]
+    new_refresh = tokens.get("refresh_token", refresh)
+    expires_in = tokens.get("expires_in", 3600)
+    expires_ms = (int(time.time()) + int(expires_in)) * 1000
+    account_id = decode_account_id(access) or raw.get("accountId", "") or ""
+    get_store().update_oauth_tokens(profile_id, access, new_refresh, expires_ms)
+    log.info("_resolve_from_store: refreshed expired Codex OAuth profile %s", profile_id)
+    return access, account_id
 
 def _resolve_from_store(provider: str) -> tuple[str, str, str]:
-    """Read credentials directly from the auth store (sync, no token refresh).
+    """Read credentials directly from the auth store.
 
     Returns (api_key, oauth_token, account_id).
     Falls back to empty strings on any error.
@@ -655,7 +495,17 @@ def _resolve_from_store(provider: str) -> tuple[str, str, str]:
                 expires = raw.get("expires", 0)
                 if expires < now_ms:
                     log.debug("_resolve_from_store: oauth %s expired", pid)
-                    continue  # Expired; skip (no refresh in sync path)
+                    try:
+                        access, account_id = _refresh_oauth_profile_sync(pid, raw)
+                    except Exception as exc:
+                        log.warning(
+                            "_resolve_from_store: oauth refresh failed for %s: %s",
+                            pid, exc,
+                        )
+                        continue
+                    if access:
+                        return "", access, account_id
+                    continue
                 account_id = raw.get("accountId", "")
                 log.debug("_resolve_from_store: → oauth token found")
                 return "", raw.get("access", ""), account_id
@@ -671,59 +521,34 @@ def _resolve_from_store(provider: str) -> tuple[str, str, str]:
 # ── Factory ───────────────────────────────────────────────────────────────────
 
 def make_llm_client() -> BaseLLMClient:
-    """Instantiate the correct LLM client.
+    """Instantiate the Codex LLM client.
 
     Credential resolution order:
       1. Auth Store (managed via the Auth tab in the UI)
-         - OAuth credential found  → codex_oauth mode
-         - API key credential found → api_key mode
-      2. LLM_API_KEY env var (classic config fallback)
-
-    LLM_OAUTH_TOKEN and OPENAI_AUTH_MODE are no longer read from the
-    environment; use the Auth tab to manage OAuth tokens.
+      2. LLM_OAUTH_TOKEN env var (classic config fallback)
     """
-    provider = os.environ.get("LLM_PROVIDER", "openai_compatible")
+    provider = "codex"
     base_url = os.environ.get("LLM_BASE_URL", "")
-    env_api_key = os.environ.get("LLM_API_KEY", "")
+    env_oauth_token = os.environ.get("LLM_OAUTH_TOKEN", "")
 
     log.debug(
-        "make_llm_client: provider=%s base_url_set=%s env_api_key_set=%s",
-        provider, bool(base_url), bool(env_api_key),
+        "make_llm_client: provider=%s base_url_set=%s env_oauth_token_set=%s",
+        provider, bool(base_url), bool(env_oauth_token),
     )
 
-    if provider == "anthropic":
-        # Try store first, fall back to env var.
-        api_key, _, _ = _resolve_from_store("anthropic")
-        if not api_key:
-            api_key = env_api_key
-        log.info("make_llm_client: → AnthropicClient")
-        return AnthropicClient(api_key=api_key)
-
-    # openai_compatible | ollama | custom_http
-    # Check store for an OAuth token (codex flow) first.
     store_key, store_oauth, account_id = _resolve_from_store("openai-codex")
     log.debug(
         "make_llm_client: store lookup → key_set=%s oauth_set=%s account_id_set=%s",
         bool(store_key), bool(store_oauth), bool(account_id),
     )
-    if store_oauth:
-        log.info("make_llm_client: → OpenAICompatibleClient (codex_oauth → chatgpt.com)")
-        return OpenAICompatibleClient(
-            provider=provider,
-            base_url=base_url,
-            api_key=store_key or env_api_key,
-            auth_mode="codex_oauth",
-            oauth_token=store_oauth,
-            account_id=account_id,
-        )
 
-    # No OAuth in store — use API key (store or env var).
-    api_key = store_key or env_api_key
-    log.info("make_llm_client: → OpenAICompatibleClient (api_key → /chat/completions)")
+    oauth_token = store_oauth or env_oauth_token
+    log.info("make_llm_client: → OpenAICompatibleClient (codex_oauth → chatgpt.com)")
     return OpenAICompatibleClient(
         provider=provider,
         base_url=base_url,
-        api_key=api_key,
-        auth_mode="api_key",
-        oauth_token="",
+        api_key=store_key,
+        auth_mode="codex_oauth",
+        oauth_token=oauth_token,
+        account_id=account_id,
     )

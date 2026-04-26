@@ -24,11 +24,11 @@ isolated.
 
 ### 2. API key / token exposure
 
-**Risk**: The `LLM_API_KEY` or `SUPERVISOR_TOKEN` leaks via logs, the audit trail,
+**Risk**: The Codex OAuth token or `SUPERVISOR_TOKEN` leaks via logs, the audit trail,
 or error responses.
 
 **Mitigations**:
-- `run.sh` never logs secret values. The log explicitly states only whether a key
+- `run.sh` never logs secret values. The log explicitly states only whether a token
   *is set*, not its value or length.
 - `agent.py` filters parameter summaries to exclude keys named `api_key`, `token`,
   `password`, `secret` before writing audit entries.
@@ -37,7 +37,7 @@ or error responses.
 **Best practices**:
 - Do not expose the add-on's Ingress port directly to the internet.
 - Use HA's built-in remote access (Nabu Casa / VPN) rather than port-forwarding.
-- Rotate your LLM API key if you suspect exposure.
+- Revoke/recreate your Codex login if you suspect OAuth token exposure.
 
 ### 3. Privilege escalation via Supervisor API
 

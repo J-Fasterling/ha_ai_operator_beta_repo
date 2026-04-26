@@ -18,15 +18,6 @@ router = APIRouter()
 
 # ── Request / Response models ──────────────────────────────────────────────────
 
-class AnthropicKeyRequest(BaseModel):
-    key: str
-
-
-class AnthropicTokenRequest(BaseModel):
-    token: str
-    expires_ms: Optional[int] = None  # ms epoch; None = no expiry
-
-
 class OAuthCompleteRequest(BaseModel):
     input: str   # Full URL, code#state, or bare code
     state: Optional[str] = None
@@ -63,32 +54,6 @@ def _profile_summary(pid: str, raw: dict, stats_map: dict) -> ProfileSummary:
         isExpired=is_expired,
         errorCount=error_count,
     )
-
-
-# ── Anthropic ──────────────────────────────────────────────────────────────────
-
-@router.post("/auth/anthropic/api-key")
-async def add_anthropic_key(req: AnthropicKeyRequest) -> ProfileSummary:
-    from auth.anthropic_auth import add_api_key
-    store = get_store()
-    try:
-        pid = add_api_key(req.key, store)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    data = store.load()
-    return _profile_summary(pid, data.profiles[pid], data.usageStats)
-
-
-@router.post("/auth/anthropic/setup-token")
-async def add_anthropic_token(req: AnthropicTokenRequest) -> ProfileSummary:
-    from auth.anthropic_auth import add_setup_token
-    store = get_store()
-    try:
-        pid = add_setup_token(req.token, req.expires_ms, store)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    data = store.load()
-    return _profile_summary(pid, data.profiles[pid], data.usageStats)
 
 
 # ── OpenAI Codex OAuth ─────────────────────────────────────────────────────────
@@ -168,6 +133,8 @@ async def auth_status() -> Dict[str, Any]:
     data = store.load()
     summaries: List[ProfileSummary] = []
     for pid, raw in data.profiles.items():
+        if raw.get("provider") != "openai-codex":
+            continue
         summaries.append(_profile_summary(pid, raw, data.usageStats))
     return {
         "profiles": [s.model_dump() for s in summaries],
@@ -185,11 +152,6 @@ async def test_profile(profile_id: str) -> Dict[str, Any]:
     raw = data.profiles[profile_id]
     cred_type = raw.get("type")
 
-    if cred_type == "api_key" and raw.get("provider") == "anthropic":
-        from auth.anthropic_auth import test_api_key
-        ok = await test_api_key(raw["key"])
-        return {"ok": ok, "detail": "Anthropic API key accepted" if ok else "Anthropic API key rejected"}
-
     if cred_type == "oauth":
         now_ms = int(time.time() * 1000)
         is_expired = raw.get("expires", 0) < now_ms
@@ -197,13 +159,6 @@ async def test_profile(profile_id: str) -> Dict[str, Any]:
             "ok": not is_expired,
             "detail": "Token valid (not expired)" if not is_expired else "Token expired",
         }
-
-    if cred_type == "token":
-        now_ms = int(time.time() * 1000)
-        expires = raw.get("expires")
-        if expires and expires < now_ms:
-            return {"ok": False, "detail": "Token expired"}
-        return {"ok": True, "detail": "Token present (expiry not checked)"}
 
     return {"ok": True, "detail": f"Profile type={cred_type} — no live test available"}
 

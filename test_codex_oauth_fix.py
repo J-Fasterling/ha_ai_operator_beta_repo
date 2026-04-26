@@ -9,7 +9,7 @@ import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "ha_ai_operator", "app"))
-from llm_clients import OpenAICompatibleClient, _CODEX_CHATGPT_BASE
+from llm_clients import OpenAICompatibleClient, _CODEX_CHATGPT_BASE, make_llm_client
 
 _calls: list[dict] = []
 
@@ -220,6 +220,30 @@ async def test_resolve_from_store_returns_3_tuple():
     print("  PASS: _resolve_from_store returns 3-tuple")
 
 
+async def test_make_llm_client_uses_codex_oauth_env_fallback():
+    """Factory uses Codex OAuth with llm_oauth_token fallback."""
+    old_token = os.environ.get("LLM_OAUTH_TOKEN")
+    old_provider = os.environ.get("LLM_PROVIDER")
+    try:
+        os.environ["LLM_OAUTH_TOKEN"] = "env-oauth-token"
+        os.environ["LLM_PROVIDER"] = "legacy-provider"
+        client = make_llm_client()
+        assert isinstance(client, OpenAICompatibleClient)
+        assert client._provider == "codex"
+        assert client._auth_mode == "codex_oauth"
+        assert client._oauth_token == "env-oauth-token"
+        print("  PASS: factory normalizes provider to Codex OAuth env fallback")
+    finally:
+        if old_token is None:
+            os.environ.pop("LLM_OAUTH_TOKEN", None)
+        else:
+            os.environ["LLM_OAUTH_TOKEN"] = old_token
+        if old_provider is None:
+            os.environ.pop("LLM_PROVIDER", None)
+        else:
+            os.environ["LLM_PROVIDER"] = old_provider
+
+
 async def main():
     print("Testing Codex OAuth fix...\n")
     server = start_mock()
@@ -232,6 +256,7 @@ async def main():
         test_codex_oauth_sends_responses_format,
         test_api_key_sends_chat_completions_format,
         test_resolve_from_store_returns_3_tuple,
+        test_make_llm_client_uses_codex_oauth_env_fallback,
     ]
     passed = failed = 0
     for t in tests:

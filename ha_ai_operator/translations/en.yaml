@@ -11,40 +11,19 @@ configuration:
       control_assist: allows basic control (lights, media, helpers).
       ops_write: full access; medium/high-risk actions require confirmation.
   llm_provider:
-    name: LLM Provider
+    name: AI Provider
     description: >-
-      Which LLM backend to use.
-      openai_compatible: any OpenAI-API-compatible provider (OpenAI, Groq, Together, OpenRouter, …).
-      ollama: local Ollama instance (default base URL http://localhost:11434/v1).
-      custom_http: custom OpenAI-compatible endpoint; set llm_base_url accordingly.
-      anthropic: Anthropic Claude models via api.anthropic.com (uses x-api-key auth, /v1/messages endpoint).
+      Fixed to Codex. Other AI providers are not selectable in this build.
   llm_model:
-    name: LLM Model
+    name: Codex Model
     description: >-
-      Concrete upstream model name used by the add-on (for example gpt-4o-mini, llama3.1, claude-3-5-sonnet-latest).
+      Concrete Codex model name used by the add-on.
       The UI sends internal alias "ha-agent"; this alias maps to this value.
-      If empty, UI requests cannot be executed because no provider model can be selected.
-  openai_auth_mode:
-    name: OpenAI Auth Mode
-    description: >-
-      Authentication mode for OpenAI-compatible requests.
-      api_key: use llm_api_key as Bearer token (standard OpenAI API key flow).
-      codex_oauth: use llm_oauth_token as Bearer token (ChatGPT Codex OAuth access token flow).
-      Ignored for Anthropic.
-  llm_base_url:
-    name: LLM Base URL
-    description: >-
-      Base URL of the LLM API, e.g. http://192.168.1.50:11434/v1 for a local Ollama.
-      Leave empty to use the provider default (api.openai.com for openai_compatible).
-  llm_api_key:
-    name: LLM API Key
-    description: >-
-      API key for the LLM provider. Stored as a password field; never logged or displayed.
-      Leave empty if the provider does not require authentication (e.g. local Ollama).
+      If empty, UI requests cannot be executed because no Codex model can be selected.
   llm_oauth_token:
-    name: LLM OAuth Token
+    name: Codex OAuth Token
     description: >-
-      OAuth access token used when openai_auth_mode is set to codex_oauth.
+      OAuth access token used for ChatGPT Codex OAuth.
       Stored as a password field; never logged or displayed.
       Example source (outside HA): jq -r '.tokens.access_token' ~/.codex/auth.json
   allow_supervisor_api:

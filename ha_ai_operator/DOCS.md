@@ -6,12 +6,9 @@
 |---|---|---|---|
 | `timezone` | string | `Europe/Berlin` | IANA timezone for the container |
 | `mode` | enum | `read_only` | Operating mode (see below) |
-| `llm_provider` | enum | `openai_compatible` | LLM backend |
-| `llm_model` | string? | *(empty)* | Concrete provider model name used for UI alias `ha-agent` |
-| `openai_auth_mode` | enum | `api_key` | `api_key` or `codex_oauth` (OpenAI-compatible only) |
-| `llm_base_url` | string? | *(empty)* | LLM API base URL |
-| `llm_api_key` | password? | *(empty)* | LLM API key — never logged |
-| `llm_oauth_token` | password? | *(empty)* | OAuth bearer token for `codex_oauth` mode |
+| `llm_provider` | string | `codex` | Fixed AI backend; runtime normalizes to Codex |
+| `llm_model` | string? | `gpt-5.2-codex` | Concrete Codex model name used for UI alias `ha-agent` |
+| `llm_oauth_token` | password? | *(empty)* | Optional Codex OAuth bearer token fallback |
 | `allow_supervisor_api` | bool | `false` | Expose Supervisor tools to agent |
 | `confirmation_required` | bool | `true` | Ask before executing risky actions |
 | `max_actions_per_turn` | int | `5` | Max HA calls per agent response |
@@ -66,27 +63,17 @@ Tokens expire if the server restarts (they are stored in `/data/state/pending_pl
 
 ---
 
-## LLM provider setup
+## Codex setup
 
-### OpenAI / Groq / Together / OpenRouter
+### Recommended: Auth tab login
 
-```yaml
-llm_provider: "openai_compatible"
-llm_model: "gpt-4o-mini"
-openai_auth_mode: "api_key"
-llm_base_url: "https://api.groq.com/openai/v1"   # example: Groq
-llm_api_key: "gsk_…"
-llm_oauth_token: null
-```
+Open the add-on panel, switch to **Auth**, start the OpenAI Codex OAuth flow, paste the redirect URL back into the form, and submit it. The add-on stores the OAuth profile in `/data/auth-profiles.json`.
 
-### ChatGPT Codex OAuth (OpenAI-compatible)
+### Config fallback
 
 ```yaml
-llm_provider: "openai_compatible"
-llm_model: "gpt-4o-mini"
-openai_auth_mode: "codex_oauth"
-llm_base_url: "https://api.openai.com/v1"
-llm_api_key: null
+llm_provider: "codex"
+llm_model: "gpt-5.2-codex"
 llm_oauth_token: "eyJ..."
 ```
 
@@ -105,33 +92,7 @@ There is currently no in-add-on browser redirect for OAuth. Use this manual flow
 3. Paste it into Home Assistant add-on config as `llm_oauth_token`.
 4. Restart the add-on.
 
-Note: the access token is temporary. If you see authentication failures, fetch a fresh token and update `llm_oauth_token`.
-
-### Local Ollama
-
-```yaml
-llm_provider: "ollama"
-llm_model: "llama3.1"
-openai_auth_mode: "api_key"
-llm_base_url: "http://192.168.1.50:11434/v1"
-llm_api_key: null
-llm_oauth_token: null
-```
-
-Recommended models with tool-calling support: `llama3.1`, `mistral-nemo`, `qwen2.5`.
-
-### Custom HTTP endpoint
-
-```yaml
-llm_provider: "custom_http"
-llm_model: "my-tool-model"
-openai_auth_mode: "api_key"
-llm_base_url: "http://my-llm-proxy:8080/v1"
-llm_api_key: "my-key"
-llm_oauth_token: null
-```
-
-The endpoint must implement `POST /chat/completions` with OpenAI tool-call format.
+Note: manual access tokens are temporary. The Auth tab stores refresh-capable OAuth profiles and is more reliable for regular use.
 
 ### Model alias behavior (`ha-agent`)
 

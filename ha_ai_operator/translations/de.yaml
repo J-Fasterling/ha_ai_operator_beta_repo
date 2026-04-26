@@ -11,40 +11,19 @@ configuration:
       control_assist: erlaubt einfache Steuerung (Lichter, Medien, Eingabe-Helfer).
       ops_write: voller Zugriff; mittel- und hochriskante Aktionen benötigen Bestätigung.
   llm_provider:
-    name: LLM-Anbieter
+    name: KI-Anbieter
     description: >-
-      Welches KI-Backend verwendet werden soll.
-      openai_compatible: beliebiger OpenAI-kompatibler Anbieter (OpenAI, Groq, Together, OpenRouter, …).
-      ollama: lokale Ollama-Instanz (Standard-URL http://localhost:11434/v1).
-      custom_http: eigener OpenAI-kompatibler Endpunkt; llm_base_url entsprechend setzen.
-      anthropic: Anthropic Claude-Modelle via api.anthropic.com (x-api-key-Auth, /v1/messages-Endpoint).
+      Fest auf Codex gesetzt. Andere KI-Anbieter sind in diesem Build nicht auswählbar.
   llm_model:
-    name: LLM-Modell
+    name: Codex-Modell
     description: >-
-      Konkreter Upstream-Modellname fuer den Add-on-Betrieb (z.B. gpt-4o-mini, llama3.1, claude-3-5-sonnet-latest).
+      Konkreter Codex-Modellname fuer den Add-on-Betrieb.
       Die UI sendet den internen Alias "ha-agent"; dieser Alias wird auf diesen Wert abgebildet.
-      Wenn leer, koennen UI-Anfragen nicht ausgefuehrt werden, weil kein Provider-Modell ausgewaehlt werden kann.
-  openai_auth_mode:
-    name: OpenAI-Auth-Modus
-    description: >-
-      Authentifizierungsmodus fuer OpenAI-kompatible Anfragen.
-      api_key: nutzt llm_api_key als Bearer-Token (standardmaessiger OpenAI-API-Key-Flow).
-      codex_oauth: nutzt llm_oauth_token als Bearer-Token (ChatGPT-Codex-OAuth-Access-Token-Flow).
-      Wird fuer Anthropic ignoriert.
-  llm_base_url:
-    name: LLM Basis-URL
-    description: >-
-      Basis-URL der LLM-API, z.B. http://192.168.1.50:11434/v1 für ein lokales Ollama.
-      Leer lassen, um den Provider-Standard zu verwenden (api.openai.com für openai_compatible).
-  llm_api_key:
-    name: LLM API-Schlüssel
-    description: >-
-      API-Schlüssel für den LLM-Anbieter. Wird als Passwort gespeichert und niemals geloggt.
-      Leer lassen, wenn der Anbieter keine Authentifizierung benötigt (z.B. lokales Ollama).
+      Wenn leer, koennen UI-Anfragen nicht ausgefuehrt werden, weil kein Codex-Modell ausgewaehlt werden kann.
   llm_oauth_token:
-    name: LLM OAuth-Token
+    name: Codex OAuth-Token
     description: >-
-      OAuth-Access-Token, wenn openai_auth_mode auf codex_oauth steht.
+      OAuth-Access-Token fuer ChatGPT Codex OAuth.
       Wird als Passwort gespeichert und niemals geloggt.
       Beispielquelle (ausserhalb von HA): jq -r '.tokens.access_token' ~/.codex/auth.json
   allow_supervisor_api:

@@ -7,7 +7,7 @@ bashio::log.info "=== HA AI Operator starting ==="
 # ── Read required options ────────────────────────────────────────────────────
 export TIMEZONE="$(bashio::config 'timezone')"
 export MODE="$(bashio::config 'mode')"
-export LLM_PROVIDER="$(bashio::config 'llm_provider')"
+export LLM_PROVIDER="codex"
 export ALLOW_SUPERVISOR_API="$(bashio::config 'allow_supervisor_api')"
 export CONFIRMATION_REQUIRED="$(bashio::config 'confirmation_required')"
 export MAX_ACTIONS_PER_TURN="$(bashio::config 'max_actions_per_turn')"
@@ -23,23 +23,8 @@ fi
 
 # ── Handle nullable / optional fields ────────────────────────────────────────
 # Never log the values of secret fields.
-if bashio::config.has_value 'llm_base_url'; then
-    export LLM_BASE_URL
-    LLM_BASE_URL="$(bashio::config 'llm_base_url')"
-else
-    export LLM_BASE_URL=""
-fi
-
-# Direct credential fields (kept for backwards compatibility).
-# Prefer the Auth tab in the UI — credentials stored there take priority.
-if bashio::config.has_value 'llm_api_key'; then
-    export LLM_API_KEY
-    LLM_API_KEY="$(bashio::config 'llm_api_key')"
-    # Never log LLM_API_KEY — not even a hash or length.
-else
-    export LLM_API_KEY=""
-fi
-
+export LLM_BASE_URL=""
+export LLM_API_KEY=""
 if bashio::config.has_value 'llm_oauth_token'; then
     export LLM_OAUTH_TOKEN
     LLM_OAUTH_TOKEN="$(bashio::config 'llm_oauth_token')"
@@ -52,8 +37,7 @@ fi
 bashio::log.info "Mode              : ${MODE}"
 bashio::log.info "LLM provider      : ${LLM_PROVIDER}"
 bashio::log.info "LLM model         : $([ -n "${LLM_MODEL}" ] && echo "${LLM_MODEL}" || echo "<unset: alias ha-agent>")"
-bashio::log.info "LLM base URL set  : $([ -n "${LLM_BASE_URL}"  ] && echo yes || echo no)"
-bashio::log.info "LLM API key set   : $([ -n "${LLM_API_KEY}"   ] && echo yes || echo no)"
+bashio::log.info "Codex OAuth set   : $([ -n "${LLM_OAUTH_TOKEN}" ] && echo yes || echo no)"
 bashio::log.info "Auth store        : /data/auth-profiles.json"
 bashio::log.info "Supervisor API    : ${ALLOW_SUPERVISOR_API}"
 bashio::log.info "Confirmation req. : ${CONFIRMATION_REQUIRED}"
