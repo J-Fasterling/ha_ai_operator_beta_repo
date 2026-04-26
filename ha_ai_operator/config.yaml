@@ -1,8 +1,8 @@
 name: "HA AI Operator - Beta"
-version: "0.1.1-beta.21"
+version: "0.1.1-beta.22"
 slug: "ha_ai_operator"
 description: "On-device AI agent to operate Home Assistant safely"
-url: "https://github.com/J-Fasterling/ha_ai_operator-beta"
+url: "https://github.com/J-Fasterling/ha_ai_operator_beta_repo"
 arch:
   - amd64
   - aarch64
