@@ -182,6 +182,12 @@ _TOOLS_SUPERVISOR: list[dict] = [
 
 log = logging.getLogger("ha_ai_operator.agent")
 
+_DEFAULT_CODEX_MODEL = "gpt-5.2-codex"
+_CODEX_MODEL_ALIASES = {
+    "gpt-5.3-codex": _DEFAULT_CODEX_MODEL,
+    "gpt-5.5-codex": _DEFAULT_CODEX_MODEL,
+}
+
 
 class Agent:
     def __init__(self) -> None:
@@ -225,10 +231,20 @@ class Agent:
         """
         requested = (requested_model or "").strip()
         if requested and requested != "ha-agent":
-            return requested
+            return self._normalize_codex_model(requested)
         if self._configured_model:
-            return self._configured_model
+            return self._normalize_codex_model(self._configured_model)
+        if os.environ.get("LLM_PROVIDER", "").strip() == "codex":
+            return _DEFAULT_CODEX_MODEL
         return ""
+
+    def _normalize_codex_model(self, model: str) -> str:
+        if os.environ.get("LLM_PROVIDER", "").strip() != "codex":
+            return model
+        normalized = _CODEX_MODEL_ALIASES.get(model, model)
+        if normalized != model:
+            log.warning("Normalizing unsupported Codex model %s to %s", model, normalized)
+        return normalized
 
     def _audit(
         self,

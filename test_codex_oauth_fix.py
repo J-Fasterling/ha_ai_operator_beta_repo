@@ -244,6 +244,56 @@ async def test_make_llm_client_uses_codex_oauth_env_fallback():
             os.environ["LLM_PROVIDER"] = old_provider
 
 
+async def test_sse_completed_event_wrapper_unwrapped():
+    """response.completed event data may wrap the final object under 'response'."""
+    response_obj = {
+        "id": "resp_wrapped",
+        "model": "gpt-5.2-codex",
+        "status": "completed",
+        "output": [{
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "wrapped ok"}],
+        }],
+    }
+
+    class FakeSSE:
+        async def aiter_lines(self):
+            yield "event: response.completed"
+            yield "data: " + json.dumps({"type": "response.completed", "response": response_obj})
+            yield ""
+            yield "data: [DONE]"
+
+    raw = await OpenAICompatibleClient._consume_sse(FakeSSE())
+    converted = OpenAICompatibleClient._responses_to_openai(raw)
+    assert converted["choices"][0]["message"]["content"] == "wrapped ok"
+    print("  PASS: wrapped response.completed SSE payload is unwrapped")
+
+
+async def test_sse_text_delta_fallback_when_completed_empty():
+    """Build a response from text events if response.completed has no output."""
+    class FakeSSE:
+        async def aiter_lines(self):
+            yield "event: response.created"
+            yield 'data: {"type":"response.created","response":{"id":"resp_delta","model":"gpt-5.2-codex"}}'
+            yield ""
+            yield "event: response.output_text.delta"
+            yield 'data: {"type":"response.output_text.delta","delta":"delta "}'
+            yield ""
+            yield "event: response.output_text.done"
+            yield 'data: {"type":"response.output_text.done","text":"delta ok"}'
+            yield ""
+            yield "event: response.completed"
+            yield 'data: {"type":"response.completed","response":{"id":"resp_delta","model":"gpt-5.2-codex","status":"completed","output":[]}}'
+            yield ""
+            yield "data: [DONE]"
+
+    raw = await OpenAICompatibleClient._consume_sse(FakeSSE())
+    converted = OpenAICompatibleClient._responses_to_openai(raw)
+    assert converted["choices"][0]["message"]["content"] == "delta ok"
+    print("  PASS: text SSE fallback is used when completed output is empty")
+
+
 async def main():
     print("Testing Codex OAuth fix...\n")
     server = start_mock()
@@ -257,6 +307,8 @@ async def main():
         test_api_key_sends_chat_completions_format,
         test_resolve_from_store_returns_3_tuple,
         test_make_llm_client_uses_codex_oauth_env_fallback,
+        test_sse_completed_event_wrapper_unwrapped,
+        test_sse_text_delta_fallback_when_completed_empty,
     ]
     passed = failed = 0
     for t in tests:

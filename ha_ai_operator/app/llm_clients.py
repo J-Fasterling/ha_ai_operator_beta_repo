@@ -331,6 +331,7 @@ class OpenAICompatibleClient(BaseLLMClient):
         created: dict = {}
         done_items: list[dict] = []
         text_deltas: list[str] = []
+        text_done = ""
         event_type = ""
         seen_events: set[str] = set()
 
@@ -348,33 +349,33 @@ class OpenAICompatibleClient(BaseLLMClient):
             data_str = line[len("data:"):].strip()
             if data_str == "[DONE]":
                 break
+            try:
+                payload = json.loads(data_str)
+            except json.JSONDecodeError:
+                continue
 
-            if event_type == "response.completed":
-                try:
-                    completed = json.loads(data_str)
-                except json.JSONDecodeError:
-                    pass
-            elif event_type == "response.created":
-                try:
-                    created = json.loads(data_str)
-                except json.JSONDecodeError:
-                    pass
-            elif event_type == "response.output_item.done":
-                try:
-                    done_items.append(json.loads(data_str))
-                except json.JSONDecodeError:
-                    pass
-            elif event_type == "response.output_text.delta":
-                try:
-                    delta = json.loads(data_str)
-                    text_deltas.append(delta.get("delta", ""))
-                except json.JSONDecodeError:
-                    pass
+            actual_event_type = event_type or payload.get("type", "")
+
+            if actual_event_type == "response.completed":
+                response_obj = payload.get("response") if isinstance(payload, dict) else None
+                completed = response_obj if isinstance(response_obj, dict) else payload
+            elif actual_event_type == "response.created":
+                response_obj = payload.get("response") if isinstance(payload, dict) else None
+                created = response_obj if isinstance(response_obj, dict) else payload
+            elif actual_event_type == "response.output_item.done":
+                item = payload.get("item") if isinstance(payload, dict) else None
+                done_items.append(item if isinstance(item, dict) else payload)
+            elif actual_event_type == "response.output_text.delta":
+                text_deltas.append(payload.get("delta", ""))
+            elif actual_event_type == "response.output_text.done":
+                text_done = payload.get("text", "") or text_done
 
         log.debug("_consume_sse: events_seen=%s", sorted(seen_events))
 
-        if completed:
+        if completed and completed.get("output"):
             return completed
+        if completed:
+            log.debug("_consume_sse: response.completed had no output; using fallback events")
 
         # Fallback: build response from accumulated items / deltas
         if done_items:
@@ -389,10 +390,11 @@ class OpenAICompatibleClient(BaseLLMClient):
                 "output": done_items,
             }
 
-        if text_deltas:
+        text = text_done or "".join(text_deltas)
+        if text:
             log.debug(
-                "_consume_sse: no done_items, building from %d text deltas",
-                len(text_deltas),
+                "_consume_sse: no done_items, building from text length=%d",
+                len(text),
             )
             return {
                 "id": created.get("id", ""),
@@ -401,7 +403,7 @@ class OpenAICompatibleClient(BaseLLMClient):
                 "output": [{
                     "type": "message",
                     "role": "assistant",
-                    "content": [{"type": "output_text", "text": "".join(text_deltas)}],
+                    "content": [{"type": "output_text", "text": text}],
                 }],
             }
 

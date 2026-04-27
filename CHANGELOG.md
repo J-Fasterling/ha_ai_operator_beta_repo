@@ -10,11 +10,15 @@ Versions on the `beta` remote are test releases; `origin/main` carries stable re
 ### Changed
 - Removed Claude/Anthropic as a selectable AI path. The add-on now normalizes
   runtime AI usage to Codex and exposes only Codex OAuth in the Auth UI.
-- Bumped the Home Assistant add-on version to `0.1.1-beta.22` and set the
+- Bumped the Home Assistant add-on version to `0.1.1-beta.23` and set the
   default Codex model to `gpt-5.2-codex`.
 - Corrected repository metadata URLs to the actual beta add-on repository.
 - Refreshed the Ingress UI with a Home Assistant-inspired layout, responsive
   mobile spacing, lighter card surfaces, and HA-blue controls.
+- Fixed Codex SSE parsing for wrapped `response.completed` events and text
+  fallback events so successful calls no longer render as `No response from agent.`
+- Normalized stale `gpt-5.3-codex` / `gpt-5.5-codex` config values to
+  `gpt-5.2-codex` at runtime.
 - Restored the `llm_oauth_token` fallback for Codex and added synchronous refresh
   of expired stored OAuth profiles when a refresh token is available.
 
