@@ -1,5 +1,5 @@
 name: "HA AI Operator - Beta"
-version: "0.1.1-beta.23"
+version: "0.1.1-beta.24"
 slug: "ha_ai_operator"
 description: "On-device AI agent to operate Home Assistant safely"
 url: "https://github.com/J-Fasterling/ha_ai_operator_beta_repo"
@@ -35,7 +35,7 @@ options:
   timezone: "Europe/Berlin"
   mode: "read_only"
   llm_provider: "codex"
-  llm_model: "gpt-5.2-codex"
+  llm_model: "gpt-5-codex"
   allow_supervisor_api: false
   confirmation_required: true
   max_actions_per_turn: 5

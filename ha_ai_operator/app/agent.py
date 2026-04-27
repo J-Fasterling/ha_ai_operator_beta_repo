@@ -182,8 +182,9 @@ _TOOLS_SUPERVISOR: list[dict] = [
 
 log = logging.getLogger("ha_ai_operator.agent")
 
-_DEFAULT_CODEX_MODEL = "gpt-5.2-codex"
+_DEFAULT_CODEX_MODEL = "gpt-5-codex"
 _CODEX_MODEL_ALIASES = {
+    "gpt-5.2-codex": _DEFAULT_CODEX_MODEL,
     "gpt-5.3-codex": _DEFAULT_CODEX_MODEL,
     "gpt-5.5-codex": _DEFAULT_CODEX_MODEL,
 }

@@ -55,7 +55,7 @@ Important: this access token can expire. If requests start failing with auth err
 timezone: "Europe/Berlin"
 mode: "control_assist"
 llm_provider: "codex"
-llm_model: "gpt-5.2-codex"
+llm_model: "gpt-5-codex"
 llm_oauth_token: null
 confirmation_required: true
 max_actions_per_turn: 5

@@ -10,6 +10,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "ha_ai_operator", "app"))
 from llm_clients import OpenAICompatibleClient, _CODEX_CHATGPT_BASE, make_llm_client
+from agent import Agent
 
 _calls: list[dict] = []
 
@@ -294,6 +295,23 @@ async def test_sse_text_delta_fallback_when_completed_empty():
     print("  PASS: text SSE fallback is used when completed output is empty")
 
 
+async def test_codex_model_aliases_use_chatgpt_account_model():
+    """Stale Codex model names normalize to the ChatGPT-account compatible alias."""
+    old_provider = os.environ.get("LLM_PROVIDER")
+    try:
+        os.environ["LLM_PROVIDER"] = "codex"
+        agent = Agent()
+        assert agent._normalize_codex_model("gpt-5.2-codex") == "gpt-5-codex"
+        assert agent._normalize_codex_model("gpt-5.3-codex") == "gpt-5-codex"
+        assert agent._normalize_codex_model("gpt-5.5-codex") == "gpt-5-codex"
+        print("  PASS: stale Codex model names normalize to gpt-5-codex")
+    finally:
+        if old_provider is None:
+            os.environ.pop("LLM_PROVIDER", None)
+        else:
+            os.environ["LLM_PROVIDER"] = old_provider
+
+
 async def main():
     print("Testing Codex OAuth fix...\n")
     server = start_mock()
@@ -309,6 +327,7 @@ async def main():
         test_make_llm_client_uses_codex_oauth_env_fallback,
         test_sse_completed_event_wrapper_unwrapped,
         test_sse_text_delta_fallback_when_completed_empty,
+        test_codex_model_aliases_use_chatgpt_account_model,
     ]
     passed = failed = 0
     for t in tests:

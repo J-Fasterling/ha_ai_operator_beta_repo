@@ -7,7 +7,7 @@
 | `timezone` | string | `Europe/Berlin` | IANA timezone for the container |
 | `mode` | enum | `read_only` | Operating mode (see below) |
 | `llm_provider` | string | `codex` | Fixed AI backend; runtime normalizes to Codex |
-| `llm_model` | string? | `gpt-5.2-codex` | Concrete Codex model name used for UI alias `ha-agent` |
+| `llm_model` | string? | `gpt-5-codex` | Concrete Codex model name used for UI alias `ha-agent` |
 | `llm_oauth_token` | password? | *(empty)* | Optional Codex OAuth bearer token fallback |
 | `allow_supervisor_api` | bool | `false` | Expose Supervisor tools to agent |
 | `confirmation_required` | bool | `true` | Ask before executing risky actions |
@@ -73,7 +73,7 @@ Open the add-on panel, switch to **Auth**, start the OpenAI Codex OAuth flow, pa
 
 ```yaml
 llm_provider: "codex"
-llm_model: "gpt-5.2-codex"
+llm_model: "gpt-5-codex"
 llm_oauth_token: "eyJ..."
 ```
 
